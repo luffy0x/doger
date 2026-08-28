@@ -139,6 +139,63 @@ test("ignores user curl configuration that could trace credentials", async (cont
   await assert.rejects(access(tracePath), { code: "ENOENT" });
 });
 
+test("sends an at-prefixed request body literally instead of reading a local file", async (context) => {
+  let receivedBody = "";
+  const server = createServer((request, response) => {
+    request.setEncoding("utf8");
+    request.on("data", (chunk: string) => {
+      receivedBody += chunk;
+    });
+    request.on("end", () => {
+      response.writeHead(200).end("synthetic_success");
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("Expected a TCP test server address.");
+  }
+
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "doger-curl-body-"));
+  context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const localPath = join(temporaryRoot, "local-secret.txt");
+  await writeFile(localPath, "synthetic-local-file-secret", "utf8");
+  const literalBody = `@${localPath}\nsecond-line\r\n`;
+  const recipe = parseRequestRecipe(
+    {
+      schemaVersion: 1,
+      endpoint: `http://127.0.0.1:${address.port}/success`,
+      method: "POST",
+      allowedHosts: ["127.0.0.1"],
+      headerNames: [],
+      includeCookie: false,
+      includeQuery: false,
+      includeBody: true,
+      response: {
+        success: { statusCodes: [200], bodyIncludesAny: ["synthetic_success"] },
+        authBodyIncludesAny: [],
+        authLocationIncludesAny: [],
+        rateLimitBodyIncludesAny: [],
+      },
+    },
+    { allowHttpForLoopbackTests: true },
+  );
+
+  await executeCurl(
+    recipe,
+    { version: 1, capturedAt: credentials.capturedAt, headers: {}, requestBody: literalBody },
+    {
+      allowHttpForLoopbackTests: true,
+      temporaryRoot,
+      environment: { ...process.env, NO_PROXY: "127.0.0.1" },
+    },
+  );
+
+  assert.equal(receivedBody, literalBody);
+  assert.equal(receivedBody.includes("synthetic-local-file-secret"), false);
+});
+
 test("classifies all HTTP outcomes through the real curl boundary", async (context) => {
   const server = createServer((request, response) => {
     const path = request.url?.split("?", 1)[0];

@@ -90,7 +90,7 @@ export function renderCurlConfig(
     if (credentials.requestBody === undefined) {
       throw new DogerError("CREDENTIALS_MISSING", "Captured request body is missing.");
     }
-    lines.push(`data-binary = ${quoteCurlConfig(credentials.requestBody)}`);
+    lines.push(`data-raw = ${quoteCurlConfig(credentials.requestBody)}`);
   }
 
   return `${lines.join("\n")}\n`;
