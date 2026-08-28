@@ -65,7 +65,7 @@ export function sanitizeAgentBrowserEnvironment(environment: NodeJS.ProcessEnv):
   return sanitized;
 }
 
-function resolveAgentBrowserExecutable(): string {
+export function resolveAgentBrowserExecutable(): string {
   if (process.platform !== "darwin" || (process.arch !== "arm64" && process.arch !== "x64")) {
     throw new DogerError("DEPENDENCY_MISSING", "Doger currently supports agent-browser on macOS only.");
   }

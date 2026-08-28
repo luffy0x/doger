@@ -34,20 +34,20 @@
 
 ## 5. Agent-Browser Bootstrap and Recovery
 
-- [ ] 5.1 Implement `doger init <application-url>` using a fresh, isolated, allowlisted agent-browser session
-- [ ] 5.2 Require user handling for login, OTP, CAPTCHA, and the initial refresh confirmation
+- [x] 5.1 Implement `doger init <application-url>` using a fresh, isolated, allowlisted agent-browser session
+- [x] 5.2 Require user handling for login, OTP, CAPTCHA, and the initial refresh confirmation
 - [x] 5.3 Capture and normalize the refresh request without persisting raw HAR content
-- [ ] 5.4 Store the first confirmed success as the immutable schedule anchor
-- [ ] 5.5 Implement `doger reauth` as an explicitly invoked interactive workflow
-- [ ] 5.6 Ensure unattended execution returns `REAUTH_REQUIRED` without opening a browser
-- [ ] 5.7 Reject unsupported dynamic signing, browser-bound proof, and risk-control challenges with `MANUAL_CHECK`
+- [x] 5.4 Store the first confirmed success as the immutable schedule anchor
+- [x] 5.5 Implement `doger reauth` as an explicitly invoked interactive workflow
+- [x] 5.6 Ensure unattended execution returns `REAUTH_REQUIRED` without opening a browser
+- [x] 5.7 Reject unsupported dynamic signing, browser-bound proof, and risk-control challenges with `MANUAL_CHECK`
 
 ## 6. CLI and Structured Output
 
-- [ ] 6.1 Implement `init`, `refresh`, `status`, `reauth`, `doctor`, and `uninstall` commands
-- [ ] 6.2 Define stable redacted JSON output for Codex consumption
-- [ ] 6.3 Define distinct exit codes for success, not due, reauthentication, rate limiting, transient failure, manual check, and configuration failure
-- [ ] 6.4 Add command-level tests for invalid configuration, missing dependencies, duplicate invocation, and all terminal outcomes
+- [x] 6.1 Implement `init`, `refresh`, `status`, `reauth`, `doctor`, and `uninstall` commands
+- [x] 6.2 Define stable redacted JSON output for Codex consumption
+- [x] 6.3 Define distinct exit codes for success, not due, reauthentication, rate limiting, transient failure, manual check, and configuration failure
+- [x] 6.4 Add command-level tests for invalid configuration, missing dependencies, duplicate invocation, and all terminal outcomes
 
 ## 7. Codex Skill
 
