@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -74,6 +76,35 @@ test("help identifies Doger and all CLI commands", () => {
 
 test("version is a valid semantic version", () => {
   assert.match(VERSION, /^\d+\.\d+\.\d+$/);
+});
+
+test("runs when invoked through a package-manager-style symlink", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "doger-cli-entrypoint-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const entrypoint = join(root, "doger");
+  await symlink(fileURLToPath(new URL("../src/cli.ts", import.meta.url)), entrypoint);
+
+  const result = await new Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }>(
+    (resolve, reject) => {
+      const child = spawn(process.execPath, ["--experimental-strip-types", entrypoint, "version"], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
+      });
+      child.once("error", reject);
+      child.once("close", (code) => resolve({ code, stderr, stdout }));
+    },
+  );
+
+  assert.deepEqual(result, { code: 0, stderr: "", stdout: `${VERSION}\n` });
 });
 
 test("maps every refresh outcome to a distinct stable exit code", async () => {

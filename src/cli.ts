@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
+import { realpathSync } from "node:fs";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline/promises";
+import { fileURLToPath } from "node:url";
 
 import type { InteractiveCaptureSession } from "./core/lifecycle-service.ts";
 import {
@@ -339,8 +341,18 @@ export async function run(argv: readonly string[], dependencies: CliDependencies
   }
 }
 
-const isEntrypoint = process.argv[1] !== undefined && import.meta.url === new URL(process.argv[1], "file:").href;
+function isDirectExecution(moduleUrl: string, argvPath: string | undefined): boolean {
+  if (argvPath === undefined) {
+    return false;
+  }
 
-if (isEntrypoint) {
+  try {
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(argvPath);
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution(import.meta.url, process.argv[1])) {
   process.exitCode = await run(process.argv.slice(2));
 }
