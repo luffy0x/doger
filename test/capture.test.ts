@@ -180,6 +180,8 @@ test("includes a domain cookie for an eligible subdomain", () => {
 test("rejects dynamic signing and sensitive endpoint paths without exposing values", () => {
   for (const detail of [
     detailPayload({ url: "https://api.jd.com/activity/refresh?h5st=synthetic-dynamic-proof" }),
+    detailPayload({ url: "https://api.jd.com/activity/refresh?signData=synthetic-dynamic-proof" }),
+    detailPayload({ postData: JSON.stringify({ items: [{ signatureValue: "synthetic-dynamic-proof" }] }) }),
     detailPayload({ url: "https://api.jd.com/activity/1234567890123456" }),
   ]) {
     assert.throws(

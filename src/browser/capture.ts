@@ -11,7 +11,7 @@ const ignoredRequestHeaders = new Set([
   "proxy-authorization",
   "transfer-encoding",
 ]);
-const dynamicProofName = /(?:^|[-_])(h5st|nonce|sign|signature|timestamp|ts)(?:$|[-_])/iu;
+const dynamicProofTokens = new Set(["h5st", "nonce", "sign", "signature", "timestamp", "ts"]);
 const safeSuccessStrings = new Set(["ok", "success", "true", "操作成功", "刷新成功", "更新成功"]);
 const preferredSuccessFields = new Set(["code", "success", "status", "resultcode", "message", "msg"]);
 
@@ -231,14 +231,19 @@ function assertStaticEndpointPath(pathname: string): void {
   }
 }
 
+function isDynamicProofName(name: string): boolean {
+  const tokenized = name.replaceAll(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+  return tokenized.split(/[^a-z0-9]+/u).some((token) => dynamicProofTokens.has(token));
+}
+
 function assertNoDynamicProof(url: URL, headers: Readonly<Record<string, string>>, body: string | undefined): void {
   for (const key of url.searchParams.keys()) {
-    if (dynamicProofName.test(key)) {
+    if (isDynamicProofName(key)) {
       throw new DogerError("CAPTURE_UNSUPPORTED", "The captured request requires an unsupported dynamic proof.");
     }
   }
   for (const key of Object.keys(headers)) {
-    if (dynamicProofName.test(key)) {
+    if (isDynamicProofName(key)) {
       throw new DogerError("CAPTURE_UNSUPPORTED", "The captured request requires an unsupported dynamic proof.");
     }
   }
@@ -256,10 +261,10 @@ function assertNoDynamicProof(url: URL, headers: Readonly<Record<string, string>
           continue;
         }
         for (const [key, value] of Object.entries(current)) {
-          if (dynamicProofName.test(key)) {
+          if (isDynamicProofName(key)) {
             throw new DogerError("CAPTURE_UNSUPPORTED", "The captured request requires an unsupported dynamic proof.");
           }
-          if (isRecord(value)) {
+          if (isRecord(value) || Array.isArray(value)) {
             stack.push(value);
           }
         }
@@ -272,7 +277,7 @@ function assertNoDynamicProof(url: URL, headers: Readonly<Record<string, string>
 
     if (headers["content-type"]?.toLowerCase().includes("application/x-www-form-urlencoded")) {
       for (const key of new URLSearchParams(body).keys()) {
-        if (dynamicProofName.test(key)) {
+        if (isDynamicProofName(key)) {
           throw new DogerError("CAPTURE_UNSUPPORTED", "The captured request requires an unsupported dynamic proof.");
         }
       }
