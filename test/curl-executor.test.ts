@@ -247,6 +247,48 @@ test("rejects oversized response headers", async (context) => {
   assert.deepEqual(result.headers, {});
 });
 
+test("classifies a real curl timeout as ambiguous", async (context) => {
+  const server = createServer(() => undefined);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("Expected a TCP test server address.");
+  }
+
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "doger-curl-timeout-"));
+  context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const recipe = parseRequestRecipe(
+    {
+      schemaVersion: 1,
+      endpoint: `http://127.0.0.1:${address.port}/timeout`,
+      method: "GET",
+      allowedHosts: ["127.0.0.1"],
+      headerNames: [],
+      includeCookie: false,
+      includeQuery: false,
+      includeBody: false,
+      response: {
+        success: { statusCodes: [200], bodyIncludesAny: ["synthetic_success"] },
+        authBodyIncludesAny: [],
+        authLocationIncludesAny: [],
+        rateLimitBodyIncludesAny: [],
+      },
+    },
+    { allowHttpForLoopbackTests: true },
+  );
+
+  const result = await executeCurl(recipe, { version: 1, capturedAt: credentials.capturedAt, headers: {} }, {
+    allowHttpForLoopbackTests: true,
+    temporaryRoot,
+    maxTimeSeconds: 0.05,
+    environment: { ...process.env, NO_PROXY: "127.0.0.1" },
+  });
+
+  assert.equal(result.exitCode, 28);
+  assert.equal(classifyResponse(result, recipe).outcome, "MANUAL_CHECK");
+});
+
 test("classifies all HTTP outcomes through the real curl boundary", async (context) => {
   const server = createServer((request, response) => {
     const path = request.url?.split("?", 1)[0];

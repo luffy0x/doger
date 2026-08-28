@@ -16,6 +16,15 @@ export interface CurlExecutorOptions extends RecipeParseOptions {
   readonly curlPath?: string;
   readonly temporaryRoot?: string;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly maxTimeSeconds?: number;
+}
+
+function requestTimeoutSeconds(value: number | undefined): number {
+  const timeout = value ?? 30;
+  if (!Number.isFinite(timeout) || timeout <= 0 || timeout > 30) {
+    throw new DogerError("RECIPE_INVALID", "Curl request timeout must be greater than zero and at most 30 seconds.");
+  }
+  return timeout;
 }
 
 function quoteCurlConfig(value: string): string {
@@ -53,6 +62,7 @@ export function renderCurlConfig(
   credentials: CredentialBundle,
   bodyPath: string,
   headersPath: string,
+  maxTimeSeconds = 30,
 ): string {
   const lines = [
     "silent",
@@ -60,7 +70,7 @@ export function renderCurlConfig(
     `request = ${quoteCurlConfig(recipe.method)}`,
     `url = ${quoteCurlConfig(buildRequestUrl(recipe, credentials))}`,
     "connect-timeout = 10",
-    "max-time = 30",
+    `max-time = ${requestTimeoutSeconds(maxTimeSeconds)}`,
     "max-redirs = 0",
     `max-filesize = ${MAX_RESPONSE_BYTES}`,
     `output = ${quoteCurlConfig(bodyPath)}`,
@@ -130,7 +140,13 @@ export async function executeCurl(
   await createPrivateFile(headersPath);
 
   try {
-    const config = renderCurlConfig(recipe, credentials, bodyPath, headersPath);
+    const config = renderCurlConfig(
+      recipe,
+      credentials,
+      bodyPath,
+      headersPath,
+      requestTimeoutSeconds(options.maxTimeSeconds),
+    );
     const result = await new Promise<{ readonly exitCode: number; readonly stdout: string }>((resolve, reject) => {
       const child = spawn(options.curlPath ?? "curl", ["--disable", "--config", "-"], {
         env: options.environment ?? process.env,
