@@ -41,9 +41,11 @@ test("uses a fresh allowlisted headed session without restore or state replay", 
   if (open === undefined) {
     assert.fail("Expected the open command to be recorded.");
   }
-  assert.deepEqual(open.args.slice(-3), ["--headed", "open", "https://campus.jd.com/application/123"]);
+  assert.deepEqual(open.args.slice(-2), ["open", "https://campus.jd.com/application/123"]);
+  assert.ok(open.args.includes("--headed"));
   assert.ok(open.args.includes("--allowed-domains"));
   assert.ok(open.args.includes("jd.com,*.jd.com,360buyimg.com,*.360buyimg.com"));
+  assert.ok(open.args.includes("--pin-tab"));
   assert.equal(open.args.includes("--restore"), false);
   assert.equal(open.args.includes("--state"), false);
   assert.equal(open.args.includes("--profile"), false);
@@ -52,6 +54,7 @@ test("uses a fresh allowlisted headed session without restore or state replay", 
   assert.equal(open.environment.AGENT_BROWSER_PROFILE, undefined);
   assert.equal(open.environment.PATH, "/usr/bin");
   assert.deepEqual(commands[1]?.args.slice(-1), ["close"]);
+  assert.ok(commands[1]?.args.includes("--headed"));
 });
 
 test("captures structured network data without returning command diagnostics", async () => {

@@ -187,7 +187,7 @@ export class AgentBrowserSession {
     }
 
     this.#opened = true;
-    await this.#execute(["--headed", "open", applicationUrl]);
+    await this.#execute(["open", applicationUrl]);
   }
 
   async clearNetworkRequests(): Promise<void> {
@@ -230,8 +230,10 @@ export class AgentBrowserSession {
         "doger",
         "--allowed-domains",
         this.#allowedDomains.join(","),
+        "--headed",
         "--idle-timeout",
         SESSION_IDLE_TIMEOUT,
+        "--pin-tab",
         "--max-output",
         String(MAX_COMMAND_OUTPUT_BYTES),
         "--json",
