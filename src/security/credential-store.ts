@@ -9,8 +9,9 @@ export interface CredentialBundle {
   readonly version: 1;
   readonly capturedAt: string;
   readonly cookieHeader?: string;
+  readonly query?: string;
+  readonly requestBody?: string;
   readonly headers: Readonly<Record<string, string>>;
-  readonly bodySecrets: Readonly<Record<string, string>>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -45,14 +46,26 @@ export function parseCredentialBundle(value: unknown): CredentialBundle {
     throw new DogerError("CREDENTIALS_INVALID", "Cookie header must be a string when present.");
   }
 
+  if (value.query !== undefined && typeof value.query !== "string") {
+    throw new DogerError("CREDENTIALS_INVALID", "Request query must be a string when present.");
+  }
+
+  if (value.requestBody !== undefined && typeof value.requestBody !== "string") {
+    throw new DogerError("CREDENTIALS_INVALID", "Request body must be a string when present.");
+  }
+
   const bundle: CredentialBundle = {
     version: 1,
     capturedAt: new Date(value.capturedAt).toISOString(),
     headers: parseStringRecord(value.headers, "headers"),
-    bodySecrets: parseStringRecord(value.bodySecrets, "bodySecrets"),
   };
 
-  return value.cookieHeader === undefined ? bundle : { ...bundle, cookieHeader: value.cookieHeader };
+  return {
+    ...bundle,
+    ...(value.cookieHeader === undefined ? {} : { cookieHeader: value.cookieHeader }),
+    ...(value.query === undefined ? {} : { query: value.query }),
+    ...(value.requestBody === undefined ? {} : { requestBody: value.requestBody }),
+  };
 }
 
 export class EncryptedCredentialStore {

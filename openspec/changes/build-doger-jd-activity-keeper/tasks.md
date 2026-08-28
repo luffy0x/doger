@@ -25,12 +25,12 @@
 
 ## 4. Curl Refresh Executor
 
-- [ ] 4.1 Define the normalized request-recipe schema with an explicit JD host allowlist
-- [ ] 4.2 Execute curl with sensitive configuration passed through stdin
-- [ ] 4.3 Apply bounded connection, request, response-size, and redirect behavior
-- [ ] 4.4 Implement `SUCCESS`, `NOT_DUE`, `REAUTH_REQUIRED`, `RATE_LIMITED`, `TRANSIENT_FAILURE`, and `MANUAL_CHECK` classification
-- [ ] 4.5 Retry eligible transient failures at most twice and never immediately retry ambiguous timeouts
-- [ ] 4.6 Add mock-server integration tests for every response class
+- [x] 4.1 Define the normalized request-recipe schema with an explicit JD host allowlist
+- [x] 4.2 Execute curl with sensitive configuration passed through stdin
+- [x] 4.3 Apply bounded connection, request, response-size, and redirect behavior
+- [x] 4.4 Implement `SUCCESS`, `NOT_DUE`, `REAUTH_REQUIRED`, `RATE_LIMITED`, `TRANSIENT_FAILURE`, and `MANUAL_CHECK` classification
+- [x] 4.5 Retry eligible transient failures at most twice and never immediately retry ambiguous timeouts
+- [x] 4.6 Add mock-server integration tests for every response class
 
 ## 5. Agent-Browser Bootstrap and Recovery
 

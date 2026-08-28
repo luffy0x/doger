@@ -27,8 +27,9 @@ const credential: CredentialBundle = {
   version: 1,
   capturedAt: "2026-08-28T01:02:03.000Z",
   cookieHeader: "session=synthetic-secret-cookie",
+  query: "signature=synthetic-secret-signature",
+  requestBody: "{\"accountId\":\"synthetic-account-id\"}",
   headers: { "x-csrf-token": "synthetic-secret-csrf" },
-  bodySecrets: { accountId: "synthetic-account-id" },
 };
 
 test("encrypts credentials at rest and decrypts them with the key provider", async (context) => {
@@ -43,6 +44,7 @@ test("encrypts credentials at rest and decrypts them with the key provider", asy
   const persisted = await readFile(path, "utf8");
   assert.doesNotMatch(persisted, /synthetic-secret-cookie/);
   assert.doesNotMatch(persisted, /synthetic-secret-csrf/);
+  assert.doesNotMatch(persisted, /synthetic-secret-signature/);
   assert.doesNotMatch(persisted, /synthetic-account-id/);
   assert.equal((await stat(path)).mode & 0o777, 0o600);
   assert.deepEqual(await store.load(), credential);
