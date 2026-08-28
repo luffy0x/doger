@@ -61,11 +61,11 @@ function cookiePayload(): unknown {
   };
 }
 
-function cookiePayloadWithPath(path: string): unknown {
+function cookiePayloadWithScope(path: string, domain = ".jd.com"): unknown {
   return {
     success: true,
     data: {
-      cookies: [{ domain: ".jd.com", name: "session", path, secure: true, value: SECRET_COOKIE }],
+      cookies: [{ domain, name: "session", path, secure: true, value: SECRET_COOKIE }],
     },
     error: null,
   };
@@ -148,12 +148,33 @@ test("normalizes capture into a public recipe and protected credentials", () => 
 test("does not send a cookie across a non-boundary path prefix", () => {
   const capture = normalizeCapturedRequest(
     detailPayload({ url: "https://api.jd.com/foobar?application=synthetic" }),
-    cookiePayloadWithPath("/foo"),
+    cookiePayloadWithScope("/foo"),
     new Date("2026-08-28T01:02:03.000Z"),
   );
 
   assert.equal(capture.recipe.includeCookie, false);
   assert.equal(capture.credentials.cookieHeader, undefined);
+});
+
+test("does not widen a host-only cookie to a subdomain", () => {
+  const capture = normalizeCapturedRequest(
+    detailPayload({ url: "https://api.campus.jd.com/activity/refresh?application=synthetic" }),
+    cookiePayloadWithScope("/", "campus.jd.com"),
+    new Date("2026-08-28T01:02:03.000Z"),
+  );
+
+  assert.equal(capture.recipe.includeCookie, false);
+  assert.equal(capture.credentials.cookieHeader, undefined);
+});
+
+test("includes a domain cookie for an eligible subdomain", () => {
+  const capture = normalizeCapturedRequest(
+    detailPayload({ url: "https://api.campus.jd.com/activity/refresh?application=synthetic" }),
+    cookiePayloadWithScope("/", ".campus.jd.com"),
+    new Date("2026-08-28T01:02:03.000Z"),
+  );
+
+  assert.equal(capture.credentials.cookieHeader, `session=${SECRET_COOKIE}`);
 });
 
 test("rejects dynamic signing and sensitive endpoint paths without exposing values", () => {

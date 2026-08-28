@@ -182,7 +182,11 @@ function parseCookies(payload: unknown): readonly CapturedCookie[] {
 }
 
 function domainMatches(host: string, cookieDomain: string): boolean {
-  const domain = cookieDomain.startsWith(".") ? cookieDomain.slice(1) : cookieDomain;
+  if (!cookieDomain.startsWith(".")) {
+    return host === cookieDomain;
+  }
+
+  const domain = cookieDomain.slice(1);
   return host === domain || host.endsWith(`.${domain}`);
 }
 
