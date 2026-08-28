@@ -23,10 +23,12 @@ Handle outcomes as follows:
 - `TRANSIENT_FAILURE`: report the outcome once; a later scheduled run may try again.
 - `MANUAL_CHECK`: stop unattended execution and explain that Doger rejected an ambiguous or changed response contract.
 
+For a successful `init`, report `scheduleAnchored`, `firstSuccessAt`, and `nextEligibleAt`. Create or enable a recurring task only when `scheduleAnchored` is `true`.
+
 ## Interactive commands
 
 Run `npm run --silent doger -- init --json`, `npm run --silent doger -- reauth --json`, or `npm run --silent doger -- uninstall --json` only after the user explicitly requests that action and while an interactive terminal is attached.
 
-For `init`, the user personally enters the delivery-record ID and complete Cookie request-header value at local prompts. For `reauth`, the user enters only the replacement Cookie value. The Token prompt is hidden. Never ask the user to paste either value into Codex, a command argument, an environment variable, a screenshot, an issue, a log, or Git.
+For `init`, the user personally enters the delivery-record ID and complete Cookie request-header value at local prompts. If those values came from an immediately preceding visibly successful website refresh, the user may type the exact non-secret confirmation `ANCHOR`; any other response keeps initialization unanchored. For `reauth`, the user enters only the replacement Cookie value. The Token prompt is hidden. Never ask the user to paste either sensitive value into Codex, a command argument, an environment variable, a screenshot, an issue, a log, or Git.
 
-`init` and `reauth` are local-only and do not contact JD. A live `refresh` is a remote account action and requires explicit action-time user authorization unless it is the already-authorized recurring Scheduled Task. Never automate login, browser inspection, OTP, CAPTCHA, token extraction, dynamic signing, or risk-control bypass.
+`init` and `reauth` are local-only and do not contact JD. Confirmed initialization uses the later local confirmation time as a conservative anchor; it does not claim that Doger sent a request. A live `refresh` is a remote account action and requires explicit action-time user authorization unless it is the already-authorized recurring Scheduled Task. Never automate login, browser inspection, OTP, CAPTCHA, token extraction, dynamic signing, or risk-control bypass.

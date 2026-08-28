@@ -13,6 +13,7 @@ Do not include JD Cookies, Tokens, passwords, OTPs, delivery-record IDs, raw HAR
 Doger treats the complete Cookie request-header value used by the verified refresh request as the authentication Token.
 
 - `init` and `reauth` accept it only through an echo-suppressed interactive terminal prompt.
+- The separate `ANCHOR` input confirms only that the immediately preceding website refresh visibly succeeded; it contains no secret and causes no network request.
 - The Token is stored directly in macOS Keychain or Windows Credential Manager through `@napi-rs/keyring`.
 - No encrypted credential file, exported browser state, or separate encryption key is written.
 - Routine refreshes pass the Token to `curl --disable --config -` through stdin, never argv or environment variables.
@@ -24,6 +25,8 @@ On macOS, persisted JSON uses owner-only POSIX permissions. On Windows, data is 
 The repository `$doger` Skill and Scheduled Task consume only redacted CLI JSON. They must not inspect local configuration, the operating-system credential store, temporary response data, or browser state and must not reconstruct curl commands.
 
 Initialization writes a Doger ownership marker before creating configuration or credential state. Uninstall removes known files only when that marker is valid; without it, same-named filesystem entries are preserved while Doger's fixed native credential entries may still be cleaned.
+
+When `ANCHOR` is confirmed, Doger uses the later local confirmation time rather than a user-supplied browser timestamp. This may delay the next refresh slightly but cannot schedule it earlier than eight hours after the attested website refresh.
 
 If the Token may have been exposed, stop scheduled execution, sign out of the affected JD session, obtain a replacement locally, and run `doger reauth`.
 

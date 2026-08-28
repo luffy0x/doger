@@ -5,11 +5,12 @@ Doger uses a Codex Scheduled Task for recurrence; it does not install a daemon, 
 ## Preconditions
 
 1. Complete local-only `doger init`.
-2. Explicitly authorize and run one `doger refresh --json`.
-3. Confirm that refresh returned `SUCCESS` and `doger status --json` reports `scheduleAnchored: true`.
-4. Use `nextEligibleAt` as the first scheduled run time. It is exactly eight hours after the first confirmed success.
+2. If the values came from an immediately preceding visibly successful website refresh, type the exact local confirmation `ANCHOR`; otherwise leave initialization unanchored.
+3. For an unanchored initialization, explicitly authorize and run one `doger refresh --json` after JD permits it.
+4. Confirm that `doger status --json` reports `scheduleAnchored: true`.
+5. Use `nextEligibleAt` as the first scheduled run time. It is exactly eight hours after the conservative manual-confirmation anchor or the first confirmed Doger success.
 
-Do not create the task after `init` alone. The computer must be on, Codex Desktop must be running, and this repository must remain available when the task is due.
+Do not create the task while `scheduleAnchored` is false. The computer must be on, Codex Desktop must be running, and this repository must remain available when the task is due.
 
 ## Durable prompt
 

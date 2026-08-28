@@ -32,7 +32,8 @@ There is no Doger daemon, platform scheduler, hosted backend, database, browser 
 ## Safety Boundaries
 
 - One JD account and one delivery record.
-- The first explicit refresh is immediately eligible; later successes enforce an exact eight-hour minimum.
+- A user-confirmed successful website refresh can establish a conservative anchor during `init`; otherwise the first explicit Doger refresh is immediately eligible.
+- Every anchored success enforces an exact eight-hour minimum before another request can start.
 - The fixed endpoint is HTTPS on `campus.jd.com`; redirects are not followed.
 - Each invocation starts at most one curl request and never retries a POST automatically.
 - The Token is stored directly in macOS Keychain or Windows Credential Manager and is passed to curl only through stdin.
@@ -68,9 +69,13 @@ Run the interactive command without arguments:
 npm run --silent doger -- init --json
 ```
 
-Doger prompts for the delivery-record ID, then accepts the Cookie Token through an echo-suppressed prompt. `init` only writes local configuration and the native credential-store entry; it does not contact JD and does not create a schedule anchor.
+Doger prompts for the delivery-record ID, accepts the Cookie Token through an echo-suppressed prompt, and then asks whether the immediately preceding website refresh visibly succeeded. Type the exact word `ANCHOR` only when it did. Doger records the confirmation time as a conservative anchor, so the next eligible run cannot occur earlier than eight hours after the real website refresh. Any other response keeps initialization unanchored and leaves the first explicit Doger refresh immediately eligible.
+
+`init` only writes local configuration, the native credential-store entry, and optional local timing state. It never contacts JD. Its JSON report includes `scheduleAnchored`, `firstSuccessAt`, and `nextEligibleAt`, but never includes the Token or delivery-record ID.
 
 Version 1 browser-capture installations are not migrated. Run confirmed `uninstall`, then initialize again.
+
+An installation created by the earlier version 2 flow remains valid but unanchored. Either wait until JD permits the next refresh and run `refresh --json` once, or run confirmed `uninstall` and initialize again if you need to attest the prior successful website refresh through the new prompt.
 
 ## Operate
 
@@ -86,7 +91,7 @@ After explicit authorization, attempt one guarded refresh:
 npm run --silent doger -- refresh --json
 ```
 
-`SUCCESS` requires HTTP success plus JSON values `success === true` and `body.success === true`. The first success becomes the immutable schedule anchor. Other terminal outcomes are `NOT_DUE`, `REAUTH_REQUIRED`, `RATE_LIMITED`, `TRANSIENT_FAILURE`, and `MANUAL_CHECK`.
+`SUCCESS` requires HTTP success plus JSON values `success === true` and `body.success === true`. On an unanchored installation, the first Doger success becomes the immutable schedule anchor. Other terminal outcomes are `NOT_DUE`, `REAUTH_REQUIRED`, `RATE_LIMITED`, `TRANSIENT_FAILURE`, and `MANUAL_CHECK`.
 
 Replace an expired Token locally:
 
@@ -98,7 +103,7 @@ npm run --silent doger -- reauth --json
 
 ## Schedule with Codex
 
-Create the recurring task only after an explicit `refresh` returns `SUCCESS` and `status --json` reports `scheduleAnchored: true`. Use `nextEligibleAt` as the first run and repeat every eight hours. See [docs/scheduled-task.md](docs/scheduled-task.md).
+Create the recurring task only after confirmed `init` or an explicit `refresh` leaves `status --json` with `scheduleAnchored: true`. Use `nextEligibleAt` as the first run and repeat every eight hours. See [docs/scheduled-task.md](docs/scheduled-task.md).
 
 The computer must be on, Codex Desktop must be running, and this project must remain available. Early or duplicate invocations are stopped by the local lock and eligibility guard.
 
@@ -124,11 +129,11 @@ When reporting a problem, use synthetic values and a local Mock server. Never at
 
 ## Development status
 
-The active redesign is tracked in [`openspec/changes/simplify-to-fixed-token-refresh/`](openspec/changes/simplify-to-fixed-token-refresh/). Local verification is:
+The manual-refresh anchor fix is tracked in [`openspec/changes/confirm-manual-refresh-anchor/`](openspec/changes/confirm-manual-refresh-anchor/). Local verification is:
 
 ```bash
 npm run check
-npx openspec validate --all --strict
+npx --yes @fission-ai/openspec@1.11.0 validate --all --strict
 npm pack --dry-run
 ```
 
