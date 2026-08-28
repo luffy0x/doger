@@ -173,6 +173,7 @@ export function recordOutcome(
   state: RuntimeState,
   outcome: Exclude<RefreshOutcome, "SUCCESS">,
   occurredAt: Date,
+  options: { readonly retryAfterAt?: string } = {},
 ): RuntimeState {
   const status: LifecycleStatus =
     outcome === "REAUTH_REQUIRED"
@@ -181,9 +182,18 @@ export function recordOutcome(
         ? "manual_check"
         : state.status;
 
+  let nextEligibleAt = state.nextEligibleAt;
+  if (outcome === "RATE_LIMITED" && options.retryAfterAt !== undefined) {
+    const retryAfter = Date.parse(options.retryAfterAt);
+    if (!Number.isNaN(retryAfter) && retryAfter > occurredAt.getTime()) {
+      nextEligibleAt = new Date(Math.max(retryAfter, nextEligibleAt === null ? 0 : Date.parse(nextEligibleAt))).toISOString();
+    }
+  }
+
   return {
     ...state,
     status,
+    nextEligibleAt,
     lastAttemptAt: occurredAt.toISOString(),
     lastOutcome: outcome,
   };
