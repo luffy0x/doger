@@ -5,7 +5,7 @@
 - [x] 1.3 Add `.gitignore` rules that exclude local state, encrypted credentials, browser sessions, HAR files, logs, and temporary captures
 - [x] 1.4 Add MIT `LICENSE`, `README.md`, and `SECURITY.md`
 - [x] 1.5 Pin `agent-browser` and `@napi-rs/keyring` in the package lockfile
-- [ ] 1.6 Display `assets/doger-logo.svg` in README and reuse it for Doger skill metadata where supported
+- [x] 1.6 Display `assets/doger-logo.svg` in README and reuse it for Doger skill metadata where supported
 
 ## 2. Configuration and Runtime State
 
@@ -19,8 +19,8 @@
 
 - [x] 3.1 Implement AES-256-GCM encryption for the credential payload
 - [x] 3.2 Store and retrieve the encryption key through `@napi-rs/keyring`
-- [ ] 3.3 Ensure credentials never enter CLI arguments, JSON status output, logs, error messages, or test snapshots
-- [ ] 3.4 Add redaction and secret-leak regression tests
+- [x] 3.3 Ensure credentials never enter CLI arguments, JSON status output, logs, error messages, or test snapshots
+- [x] 3.4 Add redaction and secret-leak regression tests
 - [x] 3.5 Implement explicit local credential deletion for uninstall and reinitialization
 
 ## 4. Curl Refresh Executor
@@ -51,26 +51,26 @@
 
 ## 7. Codex Skill
 
-- [ ] 7.1 Add `.agents/skills/doger/SKILL.md` with precise trigger conditions and safe command usage
-- [ ] 7.2 Instruct the skill to invoke deterministic commands rather than reconstructing requests itself
-- [ ] 7.3 Instruct the skill to report only redacted fields and never inspect credential files
-- [ ] 7.4 Define explicit handling for reauthentication, CAPTCHA, rate limiting, and manual-check states
-- [ ] 7.5 Verify Codex discovers and explicitly invokes `$doger` from the repository
+- [x] 7.1 Add `.agents/skills/doger/SKILL.md` with precise trigger conditions and safe command usage
+- [x] 7.2 Instruct the skill to invoke deterministic commands rather than reconstructing requests itself
+- [x] 7.3 Instruct the skill to report only redacted fields and never inspect credential files
+- [x] 7.4 Define explicit handling for reauthentication, CAPTCHA, rate limiting, and manual-check states
+- [x] 7.5 Verify Codex discovers and explicitly invokes `$doger` from the repository
 
 ## 8. Scheduled Task Integration
 
-- [ ] 8.1 Define a durable scheduled-task prompt that explicitly invokes `$doger`
+- [x] 8.1 Define a durable scheduled-task prompt that explicitly invokes `$doger`
 - [ ] 8.2 Create the recurring task only after the first confirmed successful refresh
 - [ ] 8.3 Anchor the eight-hour recurrence to that first successful execution time
 - [ ] 8.4 Configure the task to run in the local `doger` project and report failures to the current Codex task
-- [ ] 8.5 Verify duplicated scheduled runs cannot refresh before the persisted eligibility timestamp
+- [x] 8.5 Verify duplicated scheduled runs cannot refresh before the persisted eligibility timestamp
 - [ ] 8.6 Review the first two scheduled run results before treating automation as stable
 
 ## 9. Documentation and Release Safety
 
-- [ ] 9.1 Document installation, initialization, scheduled-task setup, status inspection, reauthentication, and uninstall workflows
-- [ ] 9.2 Document that the computer and Codex Desktop must be running for local scheduled execution
-- [ ] 9.3 Document the single-account/single-application scope and eight-hour minimum interval
-- [ ] 9.4 Document JD terms-of-service responsibility and the prohibition on CAPTCHA or risk-control bypass
-- [ ] 9.5 Add sanitized troubleshooting examples without real endpoints, identifiers, tokens, cookies, or response bodies
+- [x] 9.1 Document installation, initialization, scheduled-task setup, status inspection, reauthentication, and uninstall workflows
+- [x] 9.2 Document that the computer and Codex Desktop must be running for local scheduled execution
+- [x] 9.3 Document the single-account/single-application scope and eight-hour minimum interval
+- [x] 9.4 Document JD terms-of-service responsibility and the prohibition on CAPTCHA or risk-control bypass
+- [x] 9.5 Add sanitized troubleshooting examples without real endpoints, identifiers, tokens, cookies, or response bodies
 - [ ] 9.6 Run strict OpenSpec validation and the complete project test suite before release

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Doger"
+  short_description: "Safely run and report JD activity refreshes"
+  icon_small: "../../../assets/doger-logo.svg"
+  icon_large: "../../../assets/doger-logo.svg"
+  brand_color: "#3B82F6"
+  default_prompt: "Use $doger to check whether my configured JD application refresh is due and run the safe deterministic workflow."
