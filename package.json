@@ -11,6 +11,7 @@
     "dist",
     ".agents/skills/doger",
     "assets",
+    "docs",
     "README.md",
     "SECURITY.md",
     "LICENSE"
