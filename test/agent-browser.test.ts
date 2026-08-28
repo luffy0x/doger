@@ -66,6 +66,7 @@ test("captures structured network data without returning command diagnostics", a
       { exitCode: 0, stdout: '{"success":true}', stderr: "" },
       { exitCode: 0, stdout: JSON.stringify(result), stderr: "" },
       { exitCode: 0, stdout: '{"success":true,"data":{"requestId":"123.4"}}', stderr: "" },
+      { exitCode: 0, stdout: '{"success":true,"data":{"cookies":[]}}', stderr: "" },
     ]),
     sessionName: "doger-test-session",
   });
@@ -77,10 +78,12 @@ test("captures structured network data without returning command diagnostics", a
     success: true,
     data: { requestId: "123.4" },
   });
+  assert.deepEqual(await session.getCookies(), { success: true, data: { cookies: [] } });
 
   assert.deepEqual(commands[1]?.args.slice(-3), ["network", "requests", "--clear"]);
   assert.deepEqual(commands[2]?.args.slice(-4), ["network", "requests", "--type", "xhr,fetch"]);
   assert.deepEqual(commands[3]?.args.slice(-3), ["network", "request", "123.4"]);
+  assert.deepEqual(commands[4]?.args.slice(-2), ["cookies", "get"]);
 });
 
 test("does not expose captured browser output in failures", async () => {

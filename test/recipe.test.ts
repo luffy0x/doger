@@ -42,6 +42,27 @@ test("rejects status-only success classification", () => {
   );
 });
 
+test("accepts structured JSON evidence and rejects invalid predicate paths", () => {
+  assert.doesNotThrow(() =>
+    parseRequestRecipe({
+      ...validRecipe,
+      response: {
+        ...validRecipe.response,
+        success: { statusCodes: [200], bodyIncludesAny: [], jsonEqualsAny: [{ path: ["code"], equals: 0 }] },
+      },
+    }),
+  );
+  assert.throws(() =>
+    parseRequestRecipe({
+      ...validRecipe,
+      response: {
+        ...validRecipe.response,
+        success: { statusCodes: [200], bodyIncludesAny: [], jsonEqualsAny: [{ path: [], equals: 0 }] },
+      },
+    }),
+  );
+});
+
 test("rejects unsafe captured headers", () => {
   assert.throws(() => parseRequestRecipe({ ...validRecipe, headerNames: ["content-length"] }));
 });

@@ -205,6 +205,11 @@ export class AgentBrowserSession {
     return parseJsonOutput((await this.#execute(["network", "request", validateRequestId(requestId)])).stdout);
   }
 
+  async getCookies(): Promise<unknown> {
+    this.#assertOpen();
+    return parseJsonOutput((await this.#execute(["cookies", "get"])).stdout);
+  }
+
   async close(): Promise<void> {
     if (this.#closed) {
       return;

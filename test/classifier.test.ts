@@ -31,6 +31,23 @@ test("requires captured body evidence for success", () => {
   assert.equal(classifyResponse(response({ body: "{}" }), recipe).outcome, "MANUAL_CHECK");
 });
 
+test("matches structured JSON success evidence without relying on formatting", () => {
+  const structuredRecipe = parseRequestRecipe({
+    ...recipe,
+    response: {
+      ...recipe.response,
+      success: {
+        statusCodes: [200],
+        bodyIncludesAny: [],
+        jsonEqualsAny: [{ path: ["result", "code"], equals: 0 }],
+      },
+    },
+  });
+
+  assert.equal(classifyResponse(response({ body: '{ "result": { "code": 0 } }' }), structuredRecipe).outcome, "SUCCESS");
+  assert.equal(classifyResponse(response({ body: '{"result":{"code":1}}' }), structuredRecipe).outcome, "MANUAL_CHECK");
+});
+
 test("classifies authentication expiry before generic responses", () => {
   assert.equal(classifyResponse(response({ statusCode: 401 }), recipe).outcome, "REAUTH_REQUIRED");
   assert.equal(

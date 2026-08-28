@@ -2,10 +2,17 @@ import { DogerError } from "../core/errors.ts";
 
 export const RECIPE_SCHEMA_VERSION = 1 as const;
 export type HttpMethod = "GET" | "POST";
+export type JsonScalar = string | number | boolean | null;
+
+export interface JsonFieldPredicate {
+  readonly path: readonly string[];
+  readonly equals: JsonScalar;
+}
 
 export interface ResponsePredicate {
   readonly statusCodes: readonly number[];
   readonly bodyIncludesAny: readonly string[];
+  readonly jsonEqualsAny?: readonly JsonFieldPredicate[];
 }
 
 export interface ResponseContract {
@@ -63,19 +70,49 @@ function parseStatusCodes(value: unknown, field: string): readonly number[] {
   return value as number[];
 }
 
+function parseJsonEquals(value: unknown, field: string): readonly JsonFieldPredicate[] {
+  if (!Array.isArray(value)) {
+    throw new DogerError("RECIPE_INVALID", `${field} must be an array.`);
+  }
+
+  return value.map((item, index) => {
+    if (!isRecord(item) || !Array.isArray(item.path) || item.path.length === 0 || item.path.length > 4) {
+      throw new DogerError("RECIPE_INVALID", `${field}[${index}] must contain a path with one to four fields.`);
+    }
+    if (item.path.some((part) => typeof part !== "string" || part.length === 0 || part.length > 64)) {
+      throw new DogerError("RECIPE_INVALID", `${field}[${index}].path is invalid.`);
+    }
+    if (
+      item.equals !== null &&
+      typeof item.equals !== "string" &&
+      typeof item.equals !== "number" &&
+      typeof item.equals !== "boolean"
+    ) {
+      throw new DogerError("RECIPE_INVALID", `${field}[${index}].equals must be a JSON scalar.`);
+    }
+    if (typeof item.equals === "number" && !Number.isFinite(item.equals)) {
+      throw new DogerError("RECIPE_INVALID", `${field}[${index}].equals must be finite.`);
+    }
+
+    return { path: item.path as string[], equals: item.equals as JsonScalar };
+  });
+}
+
 function parsePredicate(value: unknown, field: string, requireBodyEvidence: boolean): ResponsePredicate {
   if (!isRecord(value)) {
     throw new DogerError("RECIPE_INVALID", `${field} must be an object.`);
   }
 
   const bodyIncludesAny = parseStringArray(value.bodyIncludesAny, `${field}.bodyIncludesAny`);
-  if (requireBodyEvidence && bodyIncludesAny.length === 0) {
+  const jsonEqualsAny = value.jsonEqualsAny === undefined ? undefined : parseJsonEquals(value.jsonEqualsAny, `${field}.jsonEqualsAny`);
+  if (requireBodyEvidence && bodyIncludesAny.length === 0 && (jsonEqualsAny === undefined || jsonEqualsAny.length === 0)) {
     throw new DogerError("RECIPE_INVALID", "Success classification requires body evidence.");
   }
 
   return {
     statusCodes: parseStatusCodes(value.statusCodes, `${field}.statusCodes`),
     bodyIncludesAny,
+    ...(jsonEqualsAny === undefined ? {} : { jsonEqualsAny }),
   };
 }
 

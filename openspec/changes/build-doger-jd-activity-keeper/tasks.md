@@ -36,7 +36,7 @@
 
 - [ ] 5.1 Implement `doger init <application-url>` using a fresh, isolated, allowlisted agent-browser session
 - [ ] 5.2 Require user handling for login, OTP, CAPTCHA, and the initial refresh confirmation
-- [ ] 5.3 Capture and normalize the refresh request without persisting raw HAR content
+- [x] 5.3 Capture and normalize the refresh request without persisting raw HAR content
 - [ ] 5.4 Store the first confirmed success as the immutable schedule anchor
 - [ ] 5.5 Implement `doger reauth` as an explicitly invoked interactive workflow
 - [ ] 5.6 Ensure unattended execution returns `REAUTH_REQUIRED` without opening a browser

@@ -1,5 +1,5 @@
 import type { RefreshOutcome } from "../core/state.ts";
-import type { RequestRecipe, ResponsePredicate } from "./recipe.ts";
+import type { JsonFieldPredicate, RequestRecipe, ResponsePredicate } from "./recipe.ts";
 
 export interface CurlResponse {
   readonly exitCode: number;
@@ -32,11 +32,35 @@ function bodyMatches(body: string, markers: readonly string[]): boolean {
   return markers.some((marker) => normalizedBody.includes(marker.toLowerCase()));
 }
 
+function jsonFieldMatches(value: unknown, predicate: JsonFieldPredicate): boolean {
+  let current = value;
+  for (const field of predicate.path) {
+    if (typeof current !== "object" || current === null || Array.isArray(current) || !Object.hasOwn(current, field)) {
+      return false;
+    }
+    current = (current as Record<string, unknown>)[field];
+  }
+  return current === predicate.equals;
+}
+
+function jsonMatches(body: string, predicates: readonly JsonFieldPredicate[]): boolean {
+  if (predicates.length === 0) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return predicates.some((predicate) => jsonFieldMatches(parsed, predicate));
+  } catch {
+    return false;
+  }
+}
+
 function predicateMatches(response: CurlResponse, predicate: ResponsePredicate): boolean {
   return (
     response.statusCode !== null &&
     predicate.statusCodes.includes(response.statusCode) &&
-    bodyMatches(response.body, predicate.bodyIncludesAny)
+    (bodyMatches(response.body, predicate.bodyIncludesAny) || jsonMatches(response.body, predicate.jsonEqualsAny ?? []))
   );
 }
 
