@@ -155,6 +155,13 @@ function parseJsonOutput(stdout: string): unknown {
   }
 }
 
+function assertSuccessfulOutput(stdout: string): void {
+  const payload = parseJsonOutput(stdout);
+  if (typeof payload !== "object" || payload === null || !("success" in payload) || payload.success !== true) {
+    throw new DogerError("BROWSER_EXECUTION_FAILED", "agent-browser reported an unsuccessful command.");
+  }
+}
+
 function validateRequestId(requestId: string): string {
   if (!/^[A-Za-z0-9._:-]+$/.test(requestId)) {
     throw new DogerError("BROWSER_OUTPUT_INVALID", "agent-browser returned an invalid request identifier.");
@@ -252,6 +259,7 @@ export class AgentBrowserSession {
     if (result.exitCode !== 0) {
       throw new DogerError("BROWSER_EXECUTION_FAILED", `agent-browser command failed with exit code ${result.exitCode}.`);
     }
+    assertSuccessfulOutput(result.stdout);
     return result;
   }
 }

@@ -35,6 +35,9 @@ function parseHttpsUrl(rawUrl: string): URL {
   if (url.username !== "" || url.password !== "") {
     throw new DogerError("CONFIG_INVALID", "Application URL must not contain credentials.");
   }
+  if (url.search !== "" || url.hash !== "") {
+    throw new DogerError("CONFIG_INVALID", "Application URL must not contain query parameters or fragments.");
+  }
 
   if (!isOfficialJdHost(url.hostname)) {
     throw new DogerError("CONFIG_INVALID", "Application URL must use an official JD domain.");

@@ -61,6 +61,16 @@ function cookiePayload(): unknown {
   };
 }
 
+function cookiePayloadWithPath(path: string): unknown {
+  return {
+    success: true,
+    data: {
+      cookies: [{ domain: ".jd.com", name: "session", path, secure: true, value: SECRET_COOKIE }],
+    },
+    error: null,
+  };
+}
+
 test("selects exactly one successful official JD request", () => {
   assert.equal(
     selectRefreshRequestId({
@@ -133,6 +143,17 @@ test("normalizes capture into a public recipe and protected credentials", () => 
     assert.equal(publicRecipe.includes(secret), false);
   }
   assert.equal(publicRecipe.includes("synthetic-browser-proof"), false);
+});
+
+test("does not send a cookie across a non-boundary path prefix", () => {
+  const capture = normalizeCapturedRequest(
+    detailPayload({ url: "https://api.jd.com/foobar?application=synthetic" }),
+    cookiePayloadWithPath("/foo"),
+    new Date("2026-08-28T01:02:03.000Z"),
+  );
+
+  assert.equal(capture.recipe.includeCookie, false);
+  assert.equal(capture.credentials.cookieHeader, undefined);
 });
 
 test("rejects dynamic signing and sensitive endpoint paths without exposing values", () => {

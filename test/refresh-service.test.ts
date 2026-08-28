@@ -10,6 +10,7 @@ import { createInitialState, parseRuntimeState, recordSuccess } from "../src/cor
 import type { CurlResponse } from "../src/http/classifier.ts";
 import { parseRequestRecipe } from "../src/http/recipe.ts";
 import { readJsonFile, writeJsonAtomic } from "../src/infra/json-store.ts";
+import { writeInstallationMarker } from "../src/infra/installation.ts";
 import { resolveDogerPaths } from "../src/infra/paths.ts";
 import { EncryptedCredentialStore } from "../src/security/credential-store.ts";
 import type { KeyProvider } from "../src/security/key-provider.ts";
@@ -56,6 +57,7 @@ async function fixture(context: test.TestContext, now: Date) {
   const state = recordSuccess(createInitialState(), now);
 
   await Promise.all([
+    writeInstallationMarker(paths.installationMarker),
     writeJsonAtomic(paths.config, config),
     writeJsonAtomic(paths.recipe, recipe),
     writeJsonAtomic(paths.runtimeState, state),

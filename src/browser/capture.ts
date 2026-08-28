@@ -186,12 +186,19 @@ function domainMatches(host: string, cookieDomain: string): boolean {
   return host === domain || host.endsWith(`.${domain}`);
 }
 
+function pathMatches(requestPath: string, cookiePath: string): boolean {
+  return (
+    requestPath === cookiePath ||
+    (requestPath.startsWith(cookiePath) && (cookiePath.endsWith("/") || requestPath[cookiePath.length] === "/"))
+  );
+}
+
 function cookieHeader(cookies: readonly CapturedCookie[], url: URL): string | undefined {
   const matching = cookies
     .filter(
       (cookie) =>
         domainMatches(url.hostname.toLowerCase(), cookie.domain) &&
-        url.pathname.startsWith(cookie.path) &&
+        pathMatches(url.pathname, cookie.path) &&
         (!cookie.secure || url.protocol === "https:"),
     )
     .sort((left, right) => right.path.length - left.path.length)

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -16,6 +16,7 @@ import { DogerError } from "../src/core/errors.ts";
 import { createInitialState, parseRuntimeState, recordSuccess, withRevisions } from "../src/core/state.ts";
 import { parseRequestRecipe } from "../src/http/recipe.ts";
 import { readJsonFile, writeJsonAtomic } from "../src/infra/json-store.ts";
+import { hasInstallationMarker, writeInstallationMarker } from "../src/infra/installation.ts";
 import { resolveDogerPaths } from "../src/infra/paths.ts";
 import { EncryptedCredentialStore } from "../src/security/credential-store.ts";
 import type { KeyProvider } from "../src/security/key-provider.ts";
@@ -223,6 +224,7 @@ test("reauthentication preserves the first-success anchor and advances revisions
     credentialRevision: 1,
   });
   await Promise.all([
+    writeInstallationMarker(paths.installationMarker),
     writeJsonAtomic(paths.config, config),
     writeJsonAtomic(paths.runtimeState, state),
   ]);
@@ -284,5 +286,78 @@ test("status is redacted and uninstall removes only known local files", async (c
   assert.equal(uninstall.outcome, "SUCCESS");
   assert.equal(uninstall.removed.credentials, true);
   assert.equal(uninstall.removed.keychainEntry, true);
+  assert.equal(uninstall.removed.installationMarker, true);
+  await assert.rejects(access(paths.installationMarker), { code: "ENOENT" });
   assert.equal(await readFile(unknownPath, "utf8"), "preserve me");
+});
+
+test("uninstall is a no-op for an empty directory without a Doger marker", async (context) => {
+  const { paths, keyProvider } = await fixture(context);
+
+  const report = await uninstallLocalData(paths, keyProvider);
+
+  assert.equal(report.outcome, "SUCCESS");
+  assert.deepEqual(Object.values(report.removed), [false, false, false, false, false, false, false]);
+});
+
+test("uninstall cannot race an initialization before the marker is written", async (context) => {
+  const { paths, keyProvider } = await fixture(context);
+  let releaseLogin: (() => void) | undefined;
+  let signalLoginStarted: (() => void) | undefined;
+  const loginStarted = new Promise<void>((resolve) => {
+    signalLoginStarted = resolve;
+  });
+  const loginGate = new Promise<void>((resolve) => {
+    releaseLogin = resolve;
+  });
+
+  const initialization = initializeDoger("https://campus.jd.com/application", {
+    paths,
+    keyProvider,
+    browserFactory: () => new FakeSession(),
+    prompts: {
+      async waitForLogin() {
+        signalLoginStarted?.();
+        await loginGate;
+      },
+      async confirmRefresh() {
+        return false;
+      },
+      async waitForRefresh() {},
+    },
+  });
+  await loginStarted;
+
+  await assert.rejects(
+    uninstallLocalData(paths, keyProvider),
+    (error: unknown) => error instanceof DogerError && error.code === "ALREADY_RUNNING",
+  );
+  releaseLogin?.();
+  assert.equal((await initialization).outcome, "CANCELLED");
+});
+
+test("uninstall refuses known files in a directory without a Doger marker", async (context) => {
+  const { paths, keyProvider } = await fixture(context);
+  await writeJsonAtomic(paths.config, createConfig("https://campus.jd.com/application"));
+
+  await assert.rejects(
+    uninstallLocalData(paths, keyProvider),
+    (error: unknown) => error instanceof DogerError && error.code === "STORAGE_ERROR",
+  );
+  assert.notEqual(await readJsonFile(paths.config, parseConfig), null);
+});
+
+test("uninstall preserves its marker when removing another known path fails", async (context) => {
+  const { paths, keyProvider } = await fixture(context);
+  await Promise.all([
+    writeInstallationMarker(paths.installationMarker),
+    writeJsonAtomic(paths.config, createConfig("https://campus.jd.com/application")),
+    mkdir(paths.recipe),
+  ]);
+
+  await assert.rejects(
+    uninstallLocalData(paths, keyProvider),
+    (error: unknown) => error instanceof DogerError && error.code === "STORAGE_ERROR",
+  );
+  assert.equal(await hasInstallationMarker(paths.installationMarker), true);
 });

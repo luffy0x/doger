@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -93,6 +93,50 @@ test("executes a captured request against a local mock without putting secrets i
   const config = renderCurlConfig(recipe, credentials, "/private/body", "/private/headers");
   assert.match(config, /synthetic-secret-cookie/);
   assert.deepEqual(["--config", "-"].filter((argument) => argument.includes("synthetic-secret")), []);
+});
+
+test("ignores user curl configuration that could trace credentials", async (context) => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200).end("synthetic_success");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("Expected a TCP test server address.");
+  }
+
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "doger-curl-config-"));
+  context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const tracePath = join(temporaryRoot, "curl-trace.log");
+  await writeFile(join(temporaryRoot, ".curlrc"), `trace-ascii = "${tracePath}"\n`, "utf8");
+  const recipe = parseRequestRecipe(
+    {
+      schemaVersion: 1,
+      endpoint: `http://127.0.0.1:${address.port}/success`,
+      method: "GET",
+      allowedHosts: ["127.0.0.1"],
+      headerNames: [],
+      includeCookie: true,
+      includeQuery: false,
+      includeBody: false,
+      response: {
+        success: { statusCodes: [200], bodyIncludesAny: ["synthetic_success"] },
+        authBodyIncludesAny: [],
+        authLocationIncludesAny: [],
+        rateLimitBodyIncludesAny: [],
+      },
+    },
+    { allowHttpForLoopbackTests: true },
+  );
+
+  await executeCurl(recipe, credentials, {
+    allowHttpForLoopbackTests: true,
+    temporaryRoot,
+    environment: { ...process.env, CURL_HOME: temporaryRoot, HOME: temporaryRoot, NO_PROXY: "127.0.0.1" },
+  });
+
+  await assert.rejects(access(tracePath), { code: "ENOENT" });
 });
 
 test("classifies all HTTP outcomes through the real curl boundary", async (context) => {

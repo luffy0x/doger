@@ -6,6 +6,7 @@ export interface DogerPaths {
   readonly config: string;
   readonly runtimeState: string;
   readonly credentials: string;
+  readonly installationMarker: string;
   readonly recipe: string;
   readonly refreshLock: string;
 }
@@ -46,6 +47,7 @@ export function resolveDogerPaths(options: PathOptions = {}): DogerPaths {
     config: join(root, "config.json"),
     runtimeState: join(root, "runtime.json"),
     credentials: join(root, "credentials.enc"),
+    installationMarker: join(root, "installation.json"),
     recipe: join(root, "recipe.json"),
     refreshLock: join(root, "refresh.lock"),
   };

@@ -102,6 +102,26 @@ test("does not expose captured browser output in failures", async () => {
   );
 });
 
+test("treats a structured success false response as a command failure", async () => {
+  const secret = "synthetic-secret-browser-error";
+  const session = new AgentBrowserSession("https://campus.jd.com/application/123", {
+    runner: async () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({ success: false, data: null, error: secret }),
+      stderr: "",
+    }),
+    sessionName: "doger-test-session",
+  });
+
+  await assert.rejects(
+    session.open("https://campus.jd.com/application/123"),
+    (error: unknown) =>
+      error instanceof DogerError &&
+      error.code === "BROWSER_EXECUTION_FAILED" &&
+      !error.message.includes(secret),
+  );
+});
+
 test("rejects malformed structured output without echoing it", async () => {
   const secret = "not-json-synthetic-secret";
   const session = new AgentBrowserSession("https://campus.jd.com/application/123", {

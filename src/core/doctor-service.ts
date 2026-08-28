@@ -35,8 +35,22 @@ async function probeProcess(executable: string, args: readonly string[]): Promis
       stdio: "ignore",
       windowsHide: true,
     });
-    child.once("error", () => resolve(false));
-    child.once("close", (code) => resolve(code === 0));
+    let settled = false;
+    const finish = (result: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish(false);
+    }, 5_000);
+    timer.unref();
+    child.once("error", () => finish(false));
+    child.once("close", (code) => finish(code === 0));
   });
 }
 

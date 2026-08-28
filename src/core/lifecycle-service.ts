@@ -3,6 +3,7 @@ import { access, rmdir, unlink } from "node:fs/promises";
 import { AgentBrowserSession } from "../browser/agent-browser.ts";
 import { captureRefreshRequest, type CaptureBrowserSession, type NormalizedCapture } from "../browser/capture.ts";
 import { readJsonFile, writeJsonAtomic } from "../infra/json-store.ts";
+import { hasInstallationMarker, writeInstallationMarker } from "../infra/installation.ts";
 import { withProcessLock } from "../infra/lock.ts";
 import type { DogerPaths } from "../infra/paths.ts";
 import { EncryptedCredentialStore } from "../security/credential-store.ts";
@@ -64,6 +65,7 @@ export interface StatusReport {
     readonly config: boolean;
     readonly recipe: boolean;
     readonly credentials: boolean;
+    readonly installationMarker: boolean;
   };
 }
 
@@ -77,6 +79,7 @@ export interface UninstallReport {
     readonly runtimeState: boolean;
     readonly credentials: boolean;
     readonly keychainEntry: boolean;
+    readonly installationMarker: boolean;
     readonly refreshLock: boolean;
   };
   readonly scheduledTaskRequiresCodexRemoval: true;
@@ -151,6 +154,7 @@ async function persistCapture(
     credentialRevision: baseState.credentialRevision + 1,
   });
 
+  await writeInstallationMarker(options.paths.installationMarker);
   await writeJsonAtomic(options.paths.runtimeState, gateState);
   await writeJsonAtomic(options.paths.config, nextConfig);
   await writeJsonAtomic(options.paths.recipe, capture.recipe);
@@ -193,11 +197,12 @@ export async function initializeDoger(applicationUrl: string, options: Lifecycle
 
 export async function reauthenticateDoger(options: LifecycleOptions): Promise<LifecycleReport> {
   return await withProcessLock(options.paths.refreshLock, async () => {
-    const [config, state] = await Promise.all([
+    const [installed, config, state] = await Promise.all([
+      hasInstallationMarker(options.paths.installationMarker),
       readJsonFile(options.paths.config, parseConfig),
       readJsonFile(options.paths.runtimeState, parseRuntimeState),
     ]);
-    if (config === null || state === null || state.firstSuccessAt === null) {
+    if (!installed || config === null || state === null || state.firstSuccessAt === null) {
       throw new DogerError("CONFIG_INVALID", "Doger is not initialized. Run doger init first.");
     }
 
@@ -211,8 +216,9 @@ export async function reauthenticateDoger(options: LifecycleOptions): Promise<Li
 }
 
 export async function readStatus(paths: DogerPaths): Promise<StatusReport> {
-  const [state, config, recipe, credentials] = await Promise.all([
+  const [state, installationMarker, config, recipe, credentials] = await Promise.all([
     readJsonFile(paths.runtimeState, parseRuntimeState),
+    hasInstallationMarker(paths.installationMarker),
     fileExists(paths.config),
     fileExists(paths.recipe),
     fileExists(paths.credentials),
@@ -222,7 +228,7 @@ export async function readStatus(paths: DogerPaths): Promise<StatusReport> {
   return {
     schemaVersion: 1,
     command: "status",
-    initialized: current.firstSuccessAt !== null && config && recipe && credentials,
+    initialized: current.firstSuccessAt !== null && installationMarker && config && recipe && credentials,
     status: current.status,
     firstSuccessAt: current.firstSuccessAt,
     lastSuccessAt: current.lastSuccessAt,
@@ -231,12 +237,39 @@ export async function readStatus(paths: DogerPaths): Promise<StatusReport> {
     lastOutcome: current.lastOutcome,
     recipeRevision: current.recipeRevision,
     credentialRevision: current.credentialRevision,
-    files: { config, recipe, credentials },
+    files: { config, recipe, credentials, installationMarker },
   };
 }
 
 export async function uninstallLocalData(paths: DogerPaths, keyProvider: KeyProvider): Promise<UninstallReport> {
   const report = await withProcessLock(paths.refreshLock, async () => {
+    if (!(await hasInstallationMarker(paths.installationMarker))) {
+      const knownDataExists = await Promise.all([
+        fileExists(paths.config),
+        fileExists(paths.recipe),
+        fileExists(paths.runtimeState),
+        fileExists(paths.credentials),
+      ]);
+      if (knownDataExists.some(Boolean)) {
+        throw new DogerError("STORAGE_ERROR", "Refusing to remove an unrecognized data directory.");
+      }
+      return {
+        schemaVersion: 1,
+        command: "uninstall",
+        outcome: "SUCCESS",
+        removed: {
+          config: false,
+          recipe: false,
+          runtimeState: false,
+          credentials: false,
+          keychainEntry: false,
+          installationMarker: false,
+          refreshLock: false,
+        },
+        scheduledTaskRequiresCodexRemoval: true,
+      } as const;
+    }
+
     const credentials = await fileExists(paths.credentials);
     const keychainEntry = (await keyProvider.get()) !== null;
     await new EncryptedCredentialStore(paths.credentials, keyProvider).delete();
@@ -245,12 +278,13 @@ export async function uninstallLocalData(paths: DogerPaths, keyProvider: KeyProv
       unlinkKnown(paths.recipe),
       unlinkKnown(paths.runtimeState),
     ]);
+    const installationMarker = await unlinkKnown(paths.installationMarker);
 
     return {
       schemaVersion: 1,
       command: "uninstall",
       outcome: "SUCCESS",
-      removed: { config, recipe, runtimeState, credentials, keychainEntry, refreshLock: true },
+      removed: { config, recipe, runtimeState, credentials, keychainEntry, installationMarker, refreshLock: true },
       scheduledTaskRequiresCodexRemoval: true,
     } as const;
   });

@@ -11,6 +11,7 @@ import {
 import { executeRefresh, type RefreshClientOptions } from "../http/refresh-client.ts";
 import { parseRequestRecipe, type RequestRecipe } from "../http/recipe.ts";
 import { readJsonFile, writeJsonAtomic } from "../infra/json-store.ts";
+import { hasInstallationMarker } from "../infra/installation.ts";
 import { withProcessLock, type LockOptions } from "../infra/lock.ts";
 import type { DogerPaths } from "../infra/paths.ts";
 import { EncryptedCredentialStore } from "../security/credential-store.ts";
@@ -65,11 +66,15 @@ export async function runGuardedRefresh(options: GuardedRefreshOptions): Promise
     options.paths.refreshLock,
     async () => {
       const completedAt = now();
-      const [config, recipe, state] = await Promise.all([
+      const [installed, config, recipe, state] = await Promise.all([
+        hasInstallationMarker(options.paths.installationMarker),
         requiredJson(options.paths.config, parseConfig, "Configuration"),
         requiredJson(options.paths.recipe, parseRequestRecipe, "Request recipe"),
         requiredJson(options.paths.runtimeState, parseRuntimeState, "Runtime state"),
       ]);
+      if (!installed) {
+        throw new DogerError("CONFIG_INVALID", "Doger installation marker is missing. Run doger init first.");
+      }
       if (!hostBoundaryApproved(config, recipe)) {
         const nextState = recordOutcome(state, "MANUAL_CHECK", completedAt);
         await writeJsonAtomic(options.paths.runtimeState, nextState);

@@ -18,6 +18,11 @@ test("rejects credentials embedded in the application URL", () => {
   );
 });
 
+test("rejects application URLs with query parameters or fragments", () => {
+  assert.throws(() => createConfig("https://campus.jd.com/application?token=synthetic-secret"));
+  assert.throws(() => createConfig("https://campus.jd.com/application#token=synthetic-secret"));
+});
+
 test("rejects non-JD and lookalike application hosts", () => {
   assert.throws(() => createConfig("https://example.com/application/123"));
   assert.throws(() => createConfig("https://jd.com.example.net/application/123"));

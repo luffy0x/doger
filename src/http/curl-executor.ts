@@ -130,7 +130,7 @@ export async function executeCurl(
   try {
     const config = renderCurlConfig(recipe, credentials, bodyPath, headersPath);
     const result = await new Promise<{ readonly exitCode: number; readonly stdout: string }>((resolve, reject) => {
-      const child = spawn(options.curlPath ?? "curl", ["--config", "-"], {
+      const child = spawn(options.curlPath ?? "curl", ["--disable", "--config", "-"], {
         env: options.environment ?? process.env,
         stdio: ["pipe", "pipe", "pipe"],
       });
