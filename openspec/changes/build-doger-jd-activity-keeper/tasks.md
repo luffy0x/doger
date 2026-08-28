@@ -9,19 +9,19 @@
 
 ## 2. Configuration and Runtime State
 
-- [ ] 2.1 Define and validate the single-account, single-application configuration schema
-- [ ] 2.2 Implement the persisted runtime state with first success, last success, next eligible time, last attempt, outcome, recipe revision, and credential revision
-- [ ] 2.3 Implement owner-only file permissions and atomic state replacement
-- [ ] 2.4 Implement an injected clock for deterministic eight-hour boundary tests
-- [ ] 2.5 Reject duplicate or early refresh execution without making a network request
+- [x] 2.1 Define and validate the single-account, single-application configuration schema
+- [x] 2.2 Implement the persisted runtime state with first success, last success, next eligible time, last attempt, outcome, recipe revision, and credential revision
+- [x] 2.3 Implement owner-only file permissions and atomic state replacement
+- [x] 2.4 Implement an injected clock for deterministic eight-hour boundary tests
+- [x] 2.5 Reject duplicate or early refresh execution without making a network request
 
 ## 3. Credential Storage
 
-- [ ] 3.1 Implement AES-256-GCM encryption for the credential payload
-- [ ] 3.2 Store and retrieve the encryption key through `@napi-rs/keyring`
+- [x] 3.1 Implement AES-256-GCM encryption for the credential payload
+- [x] 3.2 Store and retrieve the encryption key through `@napi-rs/keyring`
 - [ ] 3.3 Ensure credentials never enter CLI arguments, JSON status output, logs, error messages, or test snapshots
 - [ ] 3.4 Add redaction and secret-leak regression tests
-- [ ] 3.5 Implement explicit local credential deletion for uninstall and reinitialization
+- [x] 3.5 Implement explicit local credential deletion for uninstall and reinitialization
 
 ## 4. Curl Refresh Executor
 
