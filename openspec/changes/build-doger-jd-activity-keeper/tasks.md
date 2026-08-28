@@ -73,4 +73,4 @@
 - [x] 9.3 Document the single-account/single-application scope and eight-hour minimum interval
 - [x] 9.4 Document JD terms-of-service responsibility and the prohibition on CAPTCHA or risk-control bypass
 - [x] 9.5 Add sanitized troubleshooting examples without real endpoints, identifiers, tokens, cookies, or response bodies
-- [ ] 9.6 Run strict OpenSpec validation and the complete project test suite before release
+- [x] 9.6 Run strict OpenSpec validation and the complete project test suite before release
