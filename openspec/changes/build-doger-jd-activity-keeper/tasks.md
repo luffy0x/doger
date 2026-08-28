@@ -34,7 +34,7 @@
 
 ## 5. Agent-Browser Bootstrap and Recovery
 
-- [ ] 5.1 Implement `doger init <application-url>` using an isolated, encrypted agent-browser session
+- [ ] 5.1 Implement `doger init <application-url>` using a fresh, isolated, allowlisted agent-browser session
 - [ ] 5.2 Require user handling for login, OTP, CAPTCHA, and the initial refresh confirmation
 - [ ] 5.3 Capture and normalize the refresh request without persisting raw HAR content
 - [ ] 5.4 Store the first confirmed success as the immutable schedule anchor

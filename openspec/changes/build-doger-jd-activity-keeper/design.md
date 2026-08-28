@@ -112,7 +112,7 @@ The credential payload is encrypted with AES-256-GCM. The data-encryption key is
 
 The curl executor writes sensitive curl configuration to the child process over stdin. Secret values SHALL NOT appear in argv, environment diagnostics, stdout, stderr, error objects, telemetry, or persisted logs.
 
-The agent-browser session is stored using its encrypted session-state support. The encryption key is supplied only to the child process environment and is never printed.
+Each `init` or `reauth` starts a new named agent-browser session with an explicit JD domain allowlist. The session is closed after capture and is never restored or replayed. This is intentional: agent-browser cannot enforce its network allowlist when restore/state replay is enabled. Reauthentication therefore requires the user to complete login again, while the reusable request credentials remain protected by Doger's encrypted credential store.
 
 ### 6. Use explicit, conservative result classification
 

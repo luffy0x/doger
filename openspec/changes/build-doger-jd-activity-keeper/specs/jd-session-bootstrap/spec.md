@@ -49,9 +49,18 @@ Authentication recovery that requires browser interaction SHALL begin only after
 
 #### Scenario: User invokes reauthentication
 - **WHEN** the user explicitly runs the reauthentication workflow
-- **THEN** agent-browser SHALL restore the isolated session and open the configured application page
+- **THEN** agent-browser SHALL open the configured application page in a fresh, isolated, allowlisted session
 - **AND** the user SHALL handle any login or verification challenge
 - **AND** newly captured credentials SHALL replace the prior credential revision only after validation
+
+### Requirement: Ephemeral allowlisted browser sessions
+Interactive browser workflows SHALL prefer network containment over browser-session persistence.
+
+#### Scenario: Interactive browser session starts
+- **WHEN** `init` or explicitly invoked `reauth` launches agent-browser
+- **THEN** it SHALL use a unique named session and an explicit JD domain allowlist
+- **AND** it SHALL NOT enable profile, restore, state replay, auto-connect, or CDP attachment
+- **AND** it SHALL close the session after capture without persisting browser state
 
 ### Requirement: Fail closed on unsupported browser-bound requests
 The system SHALL NOT attempt to bypass dynamic signing, browser fingerprint checks, CAPTCHA, or risk-control challenges.
