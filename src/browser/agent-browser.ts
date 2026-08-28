@@ -6,8 +6,10 @@ import { dirname, join } from "node:path";
 import { DogerError } from "../core/errors.ts";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+const INTERACTIVE_OPEN_TIMEOUT_MS = 120_000;
 const MAX_COMMAND_OUTPUT_BYTES = 2 * 1024 * 1024;
 const SESSION_IDLE_TIMEOUT = "15m";
+const POST_EXIT_OUTPUT_TIMEOUT_MS = 500;
 
 export const JD_BROWSER_DOMAIN_PATTERNS = ["jd.com", "*.jd.com", "360buyimg.com", "*.360buyimg.com"] as const;
 
@@ -30,6 +32,11 @@ export interface AgentBrowserSessionOptions {
   readonly environment?: NodeJS.ProcessEnv;
   readonly runner?: AgentBrowserCommandRunner;
   readonly sessionName?: string;
+}
+
+export interface AgentBrowserExecutableOptions {
+  readonly platform?: NodeJS.Platform;
+  readonly arch?: NodeJS.Architecture;
 }
 
 function officialJdHostname(hostname: string): boolean {
@@ -55,7 +62,8 @@ export function sanitizeAgentBrowserEnvironment(environment: NodeJS.ProcessEnv):
   const sanitized: NodeJS.ProcessEnv = {};
 
   for (const [name, value] of Object.entries(environment)) {
-    if (name.startsWith("AGENT_BROWSER_") || name === "NODE_OPTIONS") {
+    const normalizedName = name.toUpperCase();
+    if (normalizedName.startsWith("AGENT_BROWSER_") || normalizedName === "NODE_OPTIONS") {
       continue;
     }
     sanitized[name] = value;
@@ -65,13 +73,23 @@ export function sanitizeAgentBrowserEnvironment(environment: NodeJS.ProcessEnv):
   return sanitized;
 }
 
-export function resolveAgentBrowserExecutable(): string {
-  if (process.platform !== "darwin" || (process.arch !== "arm64" && process.arch !== "x64")) {
-    throw new DogerError("DEPENDENCY_MISSING", "Doger currently supports agent-browser on macOS only.");
+export function resolveAgentBrowserExecutable(options: AgentBrowserExecutableOptions = {}): string {
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const launcher = fileURLToPath(import.meta.resolve("agent-browser/bin/agent-browser.js"));
+  const binaryDirectory = dirname(launcher);
+
+  if (platform === "darwin" && (arch === "arm64" || arch === "x64")) {
+    return join(binaryDirectory, `agent-browser-darwin-${arch}`);
+  }
+  if (platform === "win32" && (arch === "arm64" || arch === "x64")) {
+    return join(binaryDirectory, "agent-browser-win32-x64.exe");
   }
 
-  const launcher = fileURLToPath(import.meta.resolve("agent-browser/bin/agent-browser.js"));
-  return join(dirname(launcher), `agent-browser-darwin-${process.arch}`);
+  throw new DogerError(
+    "DEPENDENCY_MISSING",
+    "Doger supports agent-browser on macOS arm64/x64 and Windows arm64/x64 only.",
+  );
 }
 
 function collectOutput(
@@ -80,6 +98,7 @@ function collectOutput(
   state: { bytes: number },
   maxOutputBytes: number,
   onOverflow: () => void,
+  onData: () => void = () => undefined,
 ): void {
   stream.on("data", (chunk: Buffer | string) => {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -89,12 +108,14 @@ function collectOutput(
       return;
     }
     chunks.push(buffer);
+    onData();
   });
 }
 
-export const runAgentBrowserCommand: AgentBrowserCommandRunner = async (command) => {
-  const executable = resolveAgentBrowserExecutable();
-
+export async function runBrowserProcess(
+  executable: string,
+  command: AgentBrowserCommand,
+): Promise<AgentBrowserCommandResult> {
   return await new Promise<AgentBrowserCommandResult>((resolve, reject) => {
     const child = spawn(executable, [...command.args], {
       env: { ...command.environment },
@@ -106,6 +127,52 @@ export const runAgentBrowserCommand: AgentBrowserCommandRunner = async (command)
     const stderrChunks: Buffer[] = [];
     const outputState = { bytes: 0 };
     let settled = false;
+    let childExited = false;
+    let exitCode = 1;
+    let stdoutEnded = false;
+    let stderrEnded = false;
+    let postExitTimer: NodeJS.Timeout | undefined;
+
+    const finish = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (postExitTimer !== undefined) {
+        clearTimeout(postExitTimer);
+      }
+      child.stdout.destroy();
+      child.stderr.destroy();
+      resolve({
+        exitCode,
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
+      });
+    };
+
+    const stdoutContainsCompleteJson = (): boolean => {
+      try {
+        JSON.parse(Buffer.concat(stdoutChunks).toString("utf8"));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const finishAfterExitWhenComplete = (): void => {
+      if (!childExited || settled) {
+        return;
+      }
+      if ((stdoutEnded && stderrEnded) || stdoutContainsCompleteJson()) {
+        finish();
+        return;
+      }
+      if (postExitTimer === undefined) {
+        postExitTimer = setTimeout(finish, POST_EXIT_OUTPUT_TIMEOUT_MS);
+        postExitTimer.unref();
+      }
+    };
 
     const fail = (error: DogerError): void => {
       if (settled) {
@@ -113,6 +180,9 @@ export const runAgentBrowserCommand: AgentBrowserCommandRunner = async (command)
       }
       settled = true;
       clearTimeout(timer);
+      if (postExitTimer !== undefined) {
+        clearTimeout(postExitTimer);
+      }
       child.kill("SIGTERM");
       reject(error);
     };
@@ -122,29 +192,41 @@ export const runAgentBrowserCommand: AgentBrowserCommandRunner = async (command)
     }, command.timeoutMs);
     timer.unref();
 
-    collectOutput(child.stdout, stdoutChunks, outputState, command.maxOutputBytes, () => {
-      fail(new DogerError("BROWSER_OUTPUT_INVALID", "agent-browser output exceeded the safe size limit."));
-    });
+    collectOutput(
+      child.stdout,
+      stdoutChunks,
+      outputState,
+      command.maxOutputBytes,
+      () => {
+        fail(new DogerError("BROWSER_OUTPUT_INVALID", "agent-browser output exceeded the safe size limit."));
+      },
+      finishAfterExitWhenComplete,
+    );
     collectOutput(child.stderr, stderrChunks, outputState, command.maxOutputBytes, () => {
       fail(new DogerError("BROWSER_OUTPUT_INVALID", "agent-browser output exceeded the safe size limit."));
+    });
+    child.stdout.once("end", () => {
+      stdoutEnded = true;
+      finishAfterExitWhenComplete();
+    });
+    child.stderr.once("end", () => {
+      stderrEnded = true;
+      finishAfterExitWhenComplete();
     });
 
     child.once("error", () => {
       fail(new DogerError("DEPENDENCY_MISSING", "Unable to start the bundled agent-browser executable."));
     });
-    child.once("close", (exitCode) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      resolve({
-        exitCode: exitCode ?? 1,
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-        stderr: Buffer.concat(stderrChunks).toString("utf8"),
-      });
+    child.once("exit", (code) => {
+      childExited = true;
+      exitCode = code ?? 1;
+      finishAfterExitWhenComplete();
     });
   });
+}
+
+export const runAgentBrowserCommand: AgentBrowserCommandRunner = async (command) => {
+  return await runBrowserProcess(resolveAgentBrowserExecutable(), command);
 };
 
 function parseJsonOutput(stdout: string): unknown {
@@ -194,7 +276,7 @@ export class AgentBrowserSession {
     }
 
     this.#opened = true;
-    await this.#execute(["open", applicationUrl]);
+    await this.#execute(["open", applicationUrl], INTERACTIVE_OPEN_TIMEOUT_MS);
   }
 
   async clearNetworkRequests(): Promise<void> {
@@ -233,7 +315,10 @@ export class AgentBrowserSession {
     }
   }
 
-  async #execute(args: readonly string[]): Promise<AgentBrowserCommandResult> {
+  async #execute(
+    args: readonly string[],
+    timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
+  ): Promise<AgentBrowserCommandResult> {
     const result = await this.#runner({
       args: [
         "--session",
@@ -253,7 +338,7 @@ export class AgentBrowserSession {
       ],
       environment: this.#environment,
       maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
-      timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+      timeoutMs,
     });
 
     if (result.exitCode !== 0) {

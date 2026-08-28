@@ -27,6 +27,26 @@ test("reports healthy dependencies and a pre-initialization warning", async (con
   });
 });
 
+test("accepts Windows as a supported native platform", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "doger-doctor-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+
+  const report = await runDoctor({
+    paths: resolveDogerPaths({ env: { DOGER_DATA_DIR: root } }),
+    platform: "win32",
+    nodeVersion: "24.0.0",
+    probeCurl: async () => true,
+    probeAgentBrowser: async () => true,
+  });
+
+  assert.equal(report.healthy, true);
+  assert.deepEqual(report.checks.find((item) => item.name === "platform"), {
+    name: "platform",
+    status: "ok",
+    code: "windows_supported",
+  });
+});
+
 test("reports an unavailable dependency without subprocess diagnostics", async (context) => {
   const root = await mkdtemp(join(tmpdir(), "doger-doctor-"));
   context.after(() => rm(root, { recursive: true, force: true }));

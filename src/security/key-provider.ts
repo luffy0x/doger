@@ -9,6 +9,10 @@ export interface KeyProvider {
   delete(): Promise<void>;
 }
 
+export function decodeKeyringValue(encoded: string | null | undefined): Uint8Array | null {
+  return encoded == null ? null : Buffer.from(encoded, "base64");
+}
+
 export class KeyringKeyProvider implements KeyProvider {
   readonly #entry: AsyncEntry;
 
@@ -19,12 +23,12 @@ export class KeyringKeyProvider implements KeyProvider {
   async get(): Promise<Uint8Array | null> {
     try {
       const encoded = await this.#entry.getPassword();
-      return encoded === undefined ? null : Buffer.from(encoded, "base64");
+      return decodeKeyringValue(encoded);
     } catch (error) {
       if (String(error).toLowerCase().includes("no entry")) {
         return null;
       }
-      throw new DogerError("STORAGE_ERROR", "Unable to read the Doger keychain entry.", { cause: error });
+      throw new DogerError("STORAGE_ERROR", "Unable to read the Doger credential-store entry.", { cause: error });
     }
   }
 
@@ -32,7 +36,7 @@ export class KeyringKeyProvider implements KeyProvider {
     try {
       await this.#entry.setPassword(Buffer.from(key).toString("base64"));
     } catch (error) {
-      throw new DogerError("STORAGE_ERROR", "Unable to update the Doger keychain entry.", { cause: error });
+      throw new DogerError("STORAGE_ERROR", "Unable to update the Doger credential-store entry.", { cause: error });
     }
   }
 
@@ -41,7 +45,7 @@ export class KeyringKeyProvider implements KeyProvider {
       await this.#entry.deleteCredential();
     } catch (error) {
       if (!String(error).toLowerCase().includes("no entry")) {
-        throw new DogerError("STORAGE_ERROR", "Unable to delete the Doger keychain entry.", { cause: error });
+        throw new DogerError("STORAGE_ERROR", "Unable to delete the Doger credential-store entry.", { cause: error });
       }
     }
   }

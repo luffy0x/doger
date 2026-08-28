@@ -68,6 +68,16 @@ function check(name: DoctorCheck["name"], ok: boolean, codes: readonly [string, 
   return { name, status: ok ? "ok" : "error", code: ok ? codes[0] : codes[1] };
 }
 
+function platformCheck(platform: NodeJS.Platform): DoctorCheck {
+  if (platform === "darwin") {
+    return { name: "platform", status: "ok", code: "macos_supported" };
+  }
+  if (platform === "win32") {
+    return { name: "platform", status: "ok", code: "windows_supported" };
+  }
+  return { name: "platform", status: "error", code: "unsupported_platform" };
+}
+
 export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   const platform = options.platform ?? process.platform;
   const nodeVersion = options.nodeVersion ?? process.versions.node;
@@ -84,7 +94,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     configuration = { name: "configuration", status: "error", code: "configuration_invalid" };
   }
   const checks: DoctorCheck[] = [
-    check("platform", platform === "darwin", ["macos_supported", "unsupported_platform"]),
+    platformCheck(platform),
     check("node", Number.isInteger(nodeMajor) && nodeMajor >= 24, ["node_supported", "node_too_old"]),
     check("curl", await (options.probeCurl ?? (() => probeProcess("curl", ["--version"])))(), [
       "curl_available",

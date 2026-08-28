@@ -31,6 +31,11 @@ export function resolveDataDirectory(options: PathOptions = {}): string {
     return join(homeDirectory, "Library", "Application Support", "doger");
   }
 
+  if (platform === "win32") {
+    const localAppData = env.LOCALAPPDATA?.trim();
+    return join(localAppData === undefined || localAppData === "" ? join(homeDirectory, "AppData", "Local") : localAppData, "doger");
+  }
+
   const xdgStateHome = env.XDG_STATE_HOME?.trim();
   if (xdgStateHome !== undefined && xdgStateHome !== "") {
     return join(xdgStateHome, "doger");

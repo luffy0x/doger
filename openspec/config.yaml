@@ -2,12 +2,12 @@ schema: spec-driven
 
 context: |
   Project: doger, a jd-activity-keeper.
-  Product shape: a macOS-first, local-only Codex skill backed by deterministic TypeScript scripts.
+  Product shape: a Windows-and-macOS, local-only Codex skill backed by deterministic TypeScript scripts.
   Scheduling: a Codex scheduled task runs every eight hours, anchored to the first confirmed successful refresh.
   Authentication: agent-browser is used for interactive bootstrap and explicit reauthentication only.
   Execution: routine refreshes use curl; credentials must never enter model context, logs, command arguments, fixtures, or version control.
   MVP scope: one JD account and one application record.
-  Runtime: Node.js 24, TypeScript, curl, agent-browser, macOS Keychain.
+  Runtime: Node.js 24, TypeScript, curl, agent-browser, macOS Keychain or Windows Credential Manager.
 
 rules:
   proposal:

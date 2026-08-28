@@ -7,11 +7,11 @@
 <p align="center">a jd-activity-keeper</p>
 
 > [!IMPORTANT]
-> Doger is under active development. The local workflow is covered by unit and Mock HTTP integration tests, but it has not yet been validated against a live JD account. Review the capture before relying on it.
+> Doger is under active development. The local workflow is covered by unit and Mock HTTP integration tests on Windows, but it has not yet been validated against a live JD account or on macOS hardware. Review the capture before relying on it.
 
 ## What Doger Is
 
-Doger is a macOS-first, local-only Codex automation for maintaining the activity timestamp of one JD application record. Codex owns the eight-hour schedule, deterministic TypeScript code performs routine refreshes through curl, and agent-browser is reserved for interactive bootstrap and explicit reauthentication.
+Doger is a Windows-and-macOS, local-only Codex automation for maintaining the activity timestamp of one JD application record. Codex owns the eight-hour schedule, deterministic TypeScript code performs routine refreshes through curl, and agent-browser is reserved for interactive bootstrap and explicit reauthentication.
 
 ## Architecture
 
@@ -24,14 +24,14 @@ repository $doger skill
         v
 deterministic Doger CLI
    |           |           |
-runtime     keychain      curl
-state       secrets       executor
+runtime    OS credential  curl
+state         store       executor
                             |
                             v
                       allowlisted JD host
 ```
 
-No Doger daemon, launchd job, hosted backend, database, telemetry, or OpenAI API key is required.
+No Doger daemon, platform scheduler, hosted backend, database, telemetry, or OpenAI API key is required.
 
 The browser is started only for an explicit `init` or `reauth` command and is closed after capture. Routine scheduled runs start the CLI and curl, then exit, so Doger does not keep Node.js, Chromium, CPU, or GPU resources resident between runs.
 
@@ -46,7 +46,7 @@ The browser is started only for an explicit `init` or `reauth` command and is cl
 
 ## Install
 
-Requirements: macOS, Node.js 24 or newer, curl, Codex Desktop, and a JD account you are authorized to use.
+Requirements: Windows 10/11 x64 or ARM64, or macOS arm64/x64; Node.js 24 or newer; curl; Codex Desktop; Chrome; and a JD account you are authorized to use. Windows ARM64 uses the published x64 agent-browser binary through Windows emulation. WSL is not a supported Doger runtime.
 
 ```bash
 git clone https://github.com/luffy0x/doger.git
@@ -66,9 +66,9 @@ npm run --silent doger -- init 'https://<official-jd-host>/<application-page>' -
 
 In the isolated browser window, complete login, QR/OTP/CAPTCHA, and navigation yourself. Return to the terminal when prompted, type `REFRESH` to authorize one capture, click the visible refresh control exactly once, confirm visible success, and return to the terminal. Doger then stores:
 
-- non-sensitive request shape and response evidence in owner-only local files;
+- non-sensitive request shape and response evidence in platform-protected per-user local files;
 - cookies, authorization/CSRF values, query data, and request bodies in an AES-256-GCM encrypted credential file;
-- the encryption key in macOS Keychain;
+- the encryption key in macOS Keychain or Windows Credential Manager;
 - the confirmed success time as the immutable schedule anchor.
 
 If the request uses unsupported dynamic signing, browser-bound proof, ambiguous traffic, or risk control, initialization stops with `MANUAL_CHECK`.
@@ -105,7 +105,7 @@ The computer must be on, Codex Desktop must be running, and the local project mu
 
 ## Uninstall
 
-First pause or delete the Scheduled Task in Codex Desktop. Then remove Doger's known local files and Keychain entry:
+First pause or delete the Scheduled Task in Codex Desktop. Then remove Doger's known local files and operating-system credential entry:
 
 ```bash
 npm run --silent doger -- uninstall --json
@@ -125,7 +125,7 @@ When reporting a problem, use synthetic values and a local Mock server. Never at
 
 ## Scope and responsibility
 
-The MVP supports one macOS user, one JD account, and one application record, with an exact eight-hour minimum interval measured from confirmed success. Multi-account operation, cloud execution, resident scheduling, CAPTCHA solving, fingerprint evasion, and risk-control bypass are out of scope.
+The MVP supports one Windows or macOS user, one JD account, and one application record, with an exact eight-hour minimum interval measured from confirmed success. Linux/WSL runtime support, multi-account operation, cloud execution, resident scheduling, CAPTCHA solving, fingerprint evasion, and risk-control bypass are out of scope.
 
 Users are responsible for complying with JD's terms, policies, and account rules and for operating only accounts they are authorized to use.
 
@@ -138,11 +138,11 @@ npm install
 npm run check
 ```
 
-The implementation plan is tracked in [`openspec/changes/build-doger-jd-activity-keeper/`](openspec/changes/build-doger-jd-activity-keeper/).
+The original implementation plan is tracked in [`openspec/changes/build-doger-jd-activity-keeper/`](openspec/changes/build-doger-jd-activity-keeper/). Native Windows support is tracked in [`openspec/changes/add-windows-native-support/`](openspec/changes/add-windows-native-support/).
 
 ## Status
 
-The OpenSpec proposal, design, and requirements are strictly validated. Real JD initialization, live refresh, and Scheduled Task creation require separate action-time confirmation and are not performed by the test suite.
+The OpenSpec proposal, design, and requirements are strictly validated. Windows type checking, tests, build, dependency probes, agent-browser resolution, and Windows Credential Manager round trips have been locally verified. Real JD initialization, live refresh, Scheduled Task creation, and macOS hardware validation require separate action-time confirmation and are not performed by the test suite.
 
 ## License
 

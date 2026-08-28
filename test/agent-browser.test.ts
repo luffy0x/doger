@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   AgentBrowserSession,
   browserDomainPatterns,
+  resolveAgentBrowserExecutable,
+  runBrowserProcess,
   sanitizeAgentBrowserEnvironment,
   type AgentBrowserCommand,
   type AgentBrowserCommandResult,
@@ -53,8 +55,10 @@ test("uses a fresh allowlisted headed session without restore or state replay", 
   assert.equal(open.environment.AGENT_BROWSER_STATE, undefined);
   assert.equal(open.environment.AGENT_BROWSER_PROFILE, undefined);
   assert.equal(open.environment.PATH, "/usr/bin");
+  assert.equal(open.timeoutMs, 120_000);
   assert.deepEqual(commands[1]?.args.slice(-2), ["close", "--all"]);
   assert.ok(commands[1]?.args.includes("--headed"));
+  assert.equal(commands[1]?.timeoutMs, 30_000);
 });
 
 test("captures structured network data without returning command diagnostics", async () => {
@@ -155,9 +159,65 @@ test("removes inherited agent-browser controls and Node injection", () => {
   assert.deepEqual(
     sanitizeAgentBrowserEnvironment({
       AGENT_BROWSER_CONFIG: "/unsafe/config.json",
+      agent_browser_state: "/unsafe/state.json",
       NODE_OPTIONS: "--require=/unsafe/inject.js",
+      Node_Options: "--require=/unsafe/mixed-case-inject.js",
       PATH: "/usr/bin",
     }),
     { PATH: "/usr/bin", NO_COLOR: "1" },
   );
+});
+
+test("resolves the bundled Windows agent-browser executable", () => {
+  assert.match(
+    resolveAgentBrowserExecutable({ platform: "win32", arch: "x64" }),
+    /agent-browser-win32-x64\.exe$/u,
+  );
+  assert.match(
+    resolveAgentBrowserExecutable({ platform: "win32", arch: "arm64" }),
+    /agent-browser-win32-x64\.exe$/u,
+  );
+});
+
+test("returns when the CLI exits even if its daemon keeps inherited pipes open", async () => {
+  const childScript = [
+    'const { spawn } = require("node:child_process");',
+    'const daemon = spawn(process.execPath, ["-e", "setTimeout(() => {}, 1500)"], { detached: true, stdio: ["ignore", 1, 2], windowsHide: true });',
+    "daemon.unref();",
+    'process.stdout.write("{\\"success\\":true}");',
+  ].join(" ");
+  const startedAt = Date.now();
+
+  const result = await runBrowserProcess(process.execPath, {
+    args: ["--input-type=commonjs", "-e", childScript],
+    environment: process.env,
+    maxOutputBytes: 1024,
+    timeoutMs: 750,
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, '{"success":true}');
+  assert.ok(Date.now() - startedAt < 750);
+});
+
+test("waits for a complete JSON result after the CLI exits", async () => {
+  const delayedWriter = 'setTimeout(() => process.stdout.write("true}"), 100); setTimeout(() => {}, 1500);';
+  const childScript = [
+    'const { spawn } = require("node:child_process");',
+    `const daemon = spawn(process.execPath, ["-e", ${JSON.stringify(delayedWriter)}], { detached: true, stdio: ["ignore", 1, 2], windowsHide: true });`,
+    "daemon.unref();",
+    'process.stdout.write("{\\"success\\":");',
+  ].join(" ");
+  const startedAt = Date.now();
+
+  const result = await runBrowserProcess(process.execPath, {
+    args: ["--input-type=commonjs", "-e", childScript],
+    environment: process.env,
+    maxOutputBytes: 1024,
+    timeoutMs: 750,
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, '{"success":true}');
+  assert.ok(Date.now() - startedAt < 750);
 });

@@ -46,7 +46,9 @@ test("encrypts credentials at rest and decrypts them with the key provider", asy
   assert.doesNotMatch(persisted, /synthetic-secret-csrf/);
   assert.doesNotMatch(persisted, /synthetic-secret-signature/);
   assert.doesNotMatch(persisted, /synthetic-account-id/);
-  assert.equal((await stat(path)).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal((await stat(path)).mode & 0o777, 0o600);
+  }
   assert.deepEqual(await store.load(), credential);
 });
 

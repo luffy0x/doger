@@ -16,6 +16,8 @@ test("writes owner-only JSON atomically and reads it through a parser", async (c
   await writeJsonAtomic(path, state);
 
   assert.deepEqual(await readJsonFile(path, parseRuntimeState), state);
-  assert.equal((await stat(path)).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal((await stat(path)).mode & 0o777, 0o600);
+  }
   assert.match(await readFile(path, "utf8"), /"schemaVersion": 1/);
 });
