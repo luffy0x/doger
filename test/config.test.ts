@@ -1,52 +1,53 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createConfig, parseConfig, REFRESH_INTERVAL_MS } from "../src/core/config.ts";
+import {
+  CONFIG_SCHEMA_VERSION,
+  createConfig,
+  JD_REFRESH_ENDPOINT,
+  parseConfig,
+  validateRefreshEndpoint,
+} from "../src/core/config.ts";
 import { DogerError } from "../src/core/errors.ts";
 
-test("creates an eight-hour single-target configuration", () => {
-  const config = createConfig("https://campus.jd.com/application/123");
-
-  assert.equal(config.intervalMs, REFRESH_INTERVAL_MS);
-  assert.deepEqual(config.allowedHosts, ["campus.jd.com"]);
+test("creates a schema-v2 configuration for one positive delivery record", () => {
+  assert.deepEqual(createConfig("1234567"), {
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+    deliveryRecordId: 1_234_567,
+  });
 });
 
-test("rejects credentials embedded in the application URL", () => {
+test("rejects invalid delivery record identifiers", () => {
+  for (const value of ["", "0", "-1", "1.5", "1e3", "abc", String(Number.MAX_SAFE_INTEGER + 1)]) {
+    assert.throws(
+      () => createConfig(value),
+      (error: unknown) => error instanceof DogerError && error.code === "CONFIG_INVALID",
+      value,
+    );
+  }
+});
+
+test("rejects schema-v1 configuration with an explicit migration error", () => {
   assert.throws(
-    () => createConfig("https://user:secret@campus.jd.com/application/123"),
-    (error: unknown) => error instanceof DogerError && error.code === "CONFIG_INVALID",
+    () => parseConfig({ schemaVersion: 1, applicationUrl: "https://campus.jd.com/" }),
+    (error: unknown) => error instanceof DogerError && error.code === "CONFIG_MIGRATION_REQUIRED",
   );
 });
 
-test("rejects application URLs with query parameters or fragments", () => {
-  assert.throws(() => createConfig("https://campus.jd.com/application?token=synthetic-secret"));
-  assert.throws(() => createConfig("https://campus.jd.com/application#token=synthetic-secret"));
-});
-
-test("rejects non-JD and lookalike application hosts", () => {
-  assert.throws(() => createConfig("https://example.com/application/123"));
-  assert.throws(() => createConfig("https://jd.com.example.net/application/123"));
-});
-
-test("rejects intervals shorter or longer than eight hours", () => {
-  const config = createConfig("https://campus.jd.com/application/123");
-
+test("rejects extra configuration fields instead of preserving secret-like data", () => {
+  const secret = "synthetic-private-token";
   assert.throws(
-    () => parseConfig({ ...config, intervalMs: REFRESH_INTERVAL_MS - 1 }),
-    (error: unknown) => error instanceof DogerError && error.code === "CONFIG_INVALID",
+    () => parseConfig({ schemaVersion: 2, deliveryRecordId: 1, token: secret }),
+    (error: unknown) => error instanceof DogerError && !String(error).includes(secret),
   );
 });
 
-test("requires the application host in the allowlist", () => {
-  const config = createConfig("https://campus.jd.com/application/123");
-
-  assert.throws(
-    () => parseConfig({ ...config, allowedHosts: ["api.jd.com"] }),
-    (error: unknown) => error instanceof DogerError && error.code === "CONFIG_INVALID",
+test("the fixed endpoint is official JD HTTPS and test overrides are loopback-only", () => {
+  assert.equal(validateRefreshEndpoint(JD_REFRESH_ENDPOINT), JD_REFRESH_ENDPOINT);
+  assert.throws(() => validateRefreshEndpoint("https://example.com/api/wx/resume/refresh"));
+  assert.throws(() => validateRefreshEndpoint("http://127.0.0.1:8080/refresh"));
+  assert.equal(
+    validateRefreshEndpoint("http://127.0.0.1:8080/refresh", { allowLoopbackForTests: true }),
+    "http://127.0.0.1:8080/refresh",
   );
-});
-
-test("rejects non-JD hosts added to the configuration allowlist", () => {
-  const config = createConfig("https://campus.jd.com/application/123");
-  assert.throws(() => parseConfig({ ...config, allowedHosts: ["campus.jd.com", "example.com"] }));
 });

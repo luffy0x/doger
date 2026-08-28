@@ -7,46 +7,41 @@
 <p align="center">a jd-activity-keeper</p>
 
 > [!IMPORTANT]
-> Doger is under active development. The local workflow is covered by unit and Mock HTTP integration tests on Windows, but it has not yet been validated against a live JD account or on macOS hardware. Review the capture before relying on it.
+> Doger is under active development. The fixed request path is covered by unit and local Mock HTTP tests on Windows. A live JD refresh and macOS hardware acceptance remain separate, explicitly authorized checks.
 
 ## What Doger Is
 
-Doger is a Windows-and-macOS, local-only Codex automation for maintaining the activity timestamp of one JD application record. Codex owns the eight-hour schedule, deterministic TypeScript code performs routine refreshes through curl, and agent-browser is reserved for interactive bootstrap and explicit reauthentication.
-
-## Architecture
+Doger is a local-only Windows and macOS Codex automation for maintaining the activity timestamp of one JD campus application record. Codex owns the eight-hour schedule; deterministic TypeScript code executes at most one fixed curl request per invocation.
 
 ```text
-Codex scheduled task
-        |
-        v
-repository $doger skill
-        |
-        v
-deterministic Doger CLI
-   |           |           |
-runtime    OS credential  curl
-state         store       executor
-                            |
-                            v
-                      allowlisted JD host
+Codex scheduled task -> $doger -> Doger CLI
+                                    |
+                    process lock + eight-hour guard
+                                    |
+               config + OS credential store (Cookie token)
+                                    |
+             POST https://campus.jd.com/api/wx/resume/refresh
+                                    |
+                strict success && body.success classifier
+                                    |
+                     atomic redacted runtime state
 ```
 
-No Doger daemon, platform scheduler, hosted backend, database, telemetry, or OpenAI API key is required.
-
-The browser is started only for an explicit `init` or `reauth` command and is closed after capture. Routine scheduled runs start the CLI and curl, then exit, so Doger does not keep Node.js, Chromium, CPU, or GPU resources resident between runs.
+There is no Doger daemon, platform scheduler, hosted backend, database, browser automation, network capture, or OpenAI API key.
 
 ## Safety Boundaries
 
-- One JD account and one application record in the MVP.
-- Never refresh before the persisted eight-hour eligibility time.
-- Never solve CAPTCHA or bypass signing, fingerprint, or risk-control checks.
-- Never expose cookies, authorization values, CSRF values, request bodies, or raw responses to Codex, logs, fixtures, or Git.
-- Authentication expiry stops unattended execution and requires explicit user reauthentication.
-- Authentication comes from the user's normal JD website login session. Doger does not request a separate JD API credential and does not bypass login or verification controls.
+- One JD account and one delivery record.
+- The first explicit refresh is immediately eligible; later successes enforce an exact eight-hour minimum.
+- The fixed endpoint is HTTPS on `campus.jd.com`; redirects are not followed.
+- Each invocation starts at most one curl request and never retries a POST automatically.
+- The Token is stored directly in macOS Keychain or Windows Credential Manager and is passed to curl only through stdin.
+- The Token, delivery-record ID, request body, request headers, and raw JD response are omitted from CLI reports.
+- Doger never obtains credentials, opens a browser, solves CAPTCHA, or bypasses signing, device verification, or risk controls.
 
 ## Install
 
-Requirements: Windows 10/11 x64 or ARM64, or macOS arm64/x64; Node.js 24 or newer; curl; Codex Desktop; Chrome; and a JD account you are authorized to use. Windows ARM64 uses the published x64 agent-browser binary through Windows emulation. WSL is not a supported Doger runtime.
+Requirements: Windows 10/11 x64 or ARM64, or macOS arm64/x64; Node.js 24 or newer; curl; and Codex Desktop. Linux and WSL are not supported runtimes.
 
 ```bash
 git clone https://github.com/luffy0x/doger.git
@@ -56,22 +51,26 @@ npm run check
 npm run --silent doger -- doctor --json
 ```
 
+## Obtain the two local values
+
+Use only your own authenticated session on [JD Campus](https://campus.jd.com/). In the browser's developer tools, observe your own successful `POST /api/wx/resume/refresh` request and identify:
+
+- the positive numeric `deliveryRecordId` from its JSON body;
+- the complete Cookie request-header value used as the authentication Token.
+
+Keep both values local. Never paste them into Codex, a chat, a shell command, an environment variable, a screenshot, an issue, a log, or Git. Doger does not read the browser profile or capture network traffic.
+
 ## Initialize
 
-Initialization is interactive and performs one real refresh only after explicit confirmation:
+Run the interactive command without arguments:
 
 ```bash
-npm run --silent doger -- init 'https://<official-jd-host>/<application-page>' --json
+npm run --silent doger -- init --json
 ```
 
-In the isolated browser window, complete login, QR/OTP/CAPTCHA, and navigation yourself. Return to the terminal when prompted, type `REFRESH` to authorize one capture, click the visible refresh control exactly once, confirm visible success, and return to the terminal. Doger then stores:
+Doger prompts for the delivery-record ID, then accepts the Cookie Token through an echo-suppressed prompt. `init` only writes local configuration and the native credential-store entry; it does not contact JD and does not create a schedule anchor.
 
-- non-sensitive request shape and response evidence in platform-protected per-user local files;
-- cookies, authorization/CSRF values, query data, and request bodies in an AES-256-GCM encrypted credential file;
-- the encryption key in macOS Keychain or Windows Credential Manager;
-- the confirmed success time as the immutable schedule anchor.
-
-If the request uses unsupported dynamic signing, browser-bound proof, ambiguous traffic, or risk control, initialization stops with `MANUAL_CHECK`.
+Version 1 browser-capture installations are not migrated. Run confirmed `uninstall`, then initialize again.
 
 ## Operate
 
@@ -81,68 +80,59 @@ Inspect redacted state:
 npm run --silent doger -- status --json
 ```
 
-Attempt one guarded refresh:
+After explicit authorization, attempt one guarded refresh:
 
 ```bash
 npm run --silent doger -- refresh --json
 ```
 
-The command does not contact JD before `nextEligibleAt`. It uses a process lock, sends credentials to curl through stdin, applies bounded retries, and emits one of `SUCCESS`, `NOT_DUE`, `REAUTH_REQUIRED`, `RATE_LIMITED`, `TRANSIENT_FAILURE`, or `MANUAL_CHECK`.
+`SUCCESS` requires HTTP success plus JSON values `success === true` and `body.success === true`. The first success becomes the immutable schedule anchor. Other terminal outcomes are `NOT_DUE`, `REAUTH_REQUIRED`, `RATE_LIMITED`, `TRANSIENT_FAILURE`, and `MANUAL_CHECK`.
 
-If authentication expires, request reauthentication explicitly:
+Replace an expired Token locally:
 
 ```bash
 npm run --silent doger -- reauth --json
 ```
 
-Reauthentication opens a fresh allowlisted browser and requires the user to complete login and authorize one refresh again. Scheduled execution never opens a browser by itself.
+`reauth` only replaces the native credential-store entry. It does not open a browser or contact JD. It clears `REAUTH_REQUIRED`; it does not clear `MANUAL_CHECK`, because that state may indicate endpoint or response-contract drift.
 
 ## Schedule with Codex
 
-Only create the recurring task after `init` returns `SUCCESS`. Use `nextEligibleAt` for its first run and repeat every eight hours. The repository Skill is `$doger`; the durable prompt and setup checklist are in [docs/scheduled-task.md](docs/scheduled-task.md).
+Create the recurring task only after an explicit `refresh` returns `SUCCESS` and `status --json` reports `scheduleAnchored: true`. Use `nextEligibleAt` as the first run and repeat every eight hours. See [docs/scheduled-task.md](docs/scheduled-task.md).
 
-The computer must be on, Codex Desktop must be running, and the local project must remain available when the task is due. Delayed or duplicate invocations are safe: the persisted eligibility guard permits at most one due refresh and never performs catch-up bursts.
+The computer must be on, Codex Desktop must be running, and this project must remain available. Early or duplicate invocations are stopped by the local lock and eligibility guard.
 
 ## Uninstall
 
-First pause or delete the Scheduled Task in Codex Desktop. Then remove Doger's known local files and operating-system credential entry:
+Pause or delete the Codex Scheduled Task first, then run:
 
 ```bash
 npm run --silent doger -- uninstall --json
 ```
 
-Type `UNINSTALL` when prompted. Unknown files in the data directory are preserved.
+Type `UNINSTALL` when prompted. Doger removes its known configuration, runtime state, legacy v1 files, and native Token entry while preserving unknown files.
 
 ## Troubleshooting
 
-- `CONFIGURATION_FAILURE`: run `doctor --json`; if configuration is partial, uninstall and initialize again.
-- `REAUTH_REQUIRED`: explicitly run `reauth --json`; never paste a Cookie or Token into chat or a shell argument.
-- `RATE_LIMITED`: wait for `retryAfterAt`; do not create an extra retry loop.
-- `TRANSIENT_FAILURE`: let the next scheduled run handle it; the CLI already made its bounded retries.
-- `MANUAL_CHECK`: inspect the visible workflow without printing browser captures or response bodies. Doger intentionally rejects ambiguous traffic and unsupported signing or risk-control behavior.
+- `CONFIGURATION_FAILURE`: run `doctor --json`; schema v1 requires confirmed uninstall and reinitialization.
+- `REAUTH_REQUIRED`: explicitly run `reauth --json`; do not pass the Token as an argument.
+- `RATE_LIMITED`: wait until `retryAfterAt`; do not add a retry loop.
+- `TRANSIENT_FAILURE`: let a later scheduled invocation try once again.
+- `MANUAL_CHECK`: stop unattended execution and review whether the fixed endpoint or response contract changed without exposing raw data.
 
-When reporting a problem, use synthetic values and a local Mock server. Never attach raw HAR, cookies, request headers, tokens, account identifiers, or production response bodies.
+When reporting a problem, use synthetic values and a local Mock server. Never attach raw HAR, Cookies, request headers, identifiers, or production responses.
 
-## Scope and responsibility
+## Development status
 
-The MVP supports one Windows or macOS user, one JD account, and one application record, with an exact eight-hour minimum interval measured from confirmed success. Linux/WSL runtime support, multi-account operation, cloud execution, resident scheduling, CAPTCHA solving, fingerprint evasion, and risk-control bypass are out of scope.
-
-Users are responsible for complying with JD's terms, policies, and account rules and for operating only accounts they are authorized to use.
-
-## Development
-
-Run the complete local verification suite:
+The active redesign is tracked in [`openspec/changes/simplify-to-fixed-token-refresh/`](openspec/changes/simplify-to-fixed-token-refresh/). Local verification is:
 
 ```bash
-npm install
 npm run check
+npx openspec validate --all --strict
+npm pack --dry-run
 ```
 
-The original implementation plan is tracked in [`openspec/changes/build-doger-jd-activity-keeper/`](openspec/changes/build-doger-jd-activity-keeper/). Native Windows support is tracked in [`openspec/changes/add-windows-native-support/`](openspec/changes/add-windows-native-support/).
-
-## Status
-
-The OpenSpec proposal, design, and requirements are strictly validated. Windows type checking, tests, build, dependency probes, agent-browser resolution, and Windows Credential Manager round trips have been locally verified. Real JD initialization, live refresh, Scheduled Task creation, and macOS hardware validation require separate action-time confirmation and are not performed by the test suite.
+Live JD execution, recurring-task observation, and macOS hardware validation are deliberately outside the automated test suite.
 
 ## License
 

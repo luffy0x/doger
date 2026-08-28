@@ -1,5 +1,6 @@
-import { parseConfig, type DogerConfig } from "./config.ts";
+import { JD_REFRESH_ENDPOINT, parseConfig, validateRefreshEndpoint } from "./config.ts";
 import { DogerError } from "./errors.ts";
+import { REPORT_SCHEMA_VERSION } from "./report.ts";
 import {
   dueDecision,
   parseRuntimeState,
@@ -9,20 +10,19 @@ import {
   type RuntimeState,
 } from "./state.ts";
 import { executeRefresh, type RefreshClientOptions } from "../http/refresh-client.ts";
-import { parseRequestRecipe, type RequestRecipe } from "../http/recipe.ts";
 import { readJsonFile, writeJsonAtomic } from "../infra/json-store.ts";
 import { hasInstallationMarker } from "../infra/installation.ts";
 import { withProcessLock, type LockOptions } from "../infra/lock.ts";
 import type { DogerPaths } from "../infra/paths.ts";
-import { EncryptedCredentialStore } from "../security/credential-store.ts";
-import type { KeyProvider } from "../security/key-provider.ts";
+import type { TokenStore } from "../security/token-store.ts";
+import { validateToken } from "../security/token-store.ts";
 
 export interface RefreshReport {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof REPORT_SCHEMA_VERSION;
   readonly command: "refresh";
   readonly outcome: RefreshOutcome;
   readonly attempted: boolean;
-  readonly attempts: number;
+  readonly attempts: 0 | 1;
   readonly completedAt: string;
   readonly nextEligibleAt: string | null;
   readonly reason: string;
@@ -30,7 +30,7 @@ export interface RefreshReport {
 }
 
 export interface GuardedRefreshOptions {
-  readonly keyProvider: KeyProvider;
+  readonly tokenStore: TokenStore;
   readonly lock?: Omit<LockOptions, "now">;
   readonly now?: () => Date;
   readonly paths: DogerPaths;
@@ -39,112 +39,94 @@ export interface GuardedRefreshOptions {
 
 async function requiredJson<T>(path: string, parser: (value: unknown) => T, label: string): Promise<T> {
   const value = await readJsonFile(path, parser);
-  if (value === null) {
-    throw new DogerError("CONFIG_INVALID", `${label} is missing. Run doger init first.`);
-  }
+  if (value === null) throw new DogerError("CONFIG_INVALID", `${label} is missing. Run doger init first.`);
   return value;
 }
 
-function hostBoundaryApproved(config: DogerConfig, recipe: RequestRecipe): boolean {
-  return recipe.allowedHosts.every((host) => config.allowedHosts.includes(host));
+function blockedOutcome(state: RuntimeState): "REAUTH_REQUIRED" | "MANUAL_CHECK" | null {
+  if (state.status === "reauth_required") return "REAUTH_REQUIRED";
+  if (state.status === "manual_check") return "MANUAL_CHECK";
+  return null;
 }
 
-function blockedOutcome(state: RuntimeState): RefreshOutcome | null {
-  if (state.status === "reauth_required") {
-    return "REAUTH_REQUIRED";
-  }
-  if (state.status === "manual_check") {
-    return "MANUAL_CHECK";
-  }
-  return null;
+function skippedReport(
+  state: RuntimeState,
+  completedAt: Date,
+  outcome: "NOT_DUE" | "REAUTH_REQUIRED" | "MANUAL_CHECK",
+  reason: string,
+): RefreshReport {
+  return {
+    schemaVersion: REPORT_SCHEMA_VERSION,
+    command: "refresh",
+    outcome,
+    attempted: false,
+    attempts: 0,
+    completedAt: completedAt.toISOString(),
+    nextEligibleAt: state.nextEligibleAt,
+    reason,
+  };
 }
 
 export async function runGuardedRefresh(options: GuardedRefreshOptions): Promise<RefreshReport> {
   const now = options.now ?? (() => new Date());
-
   return await withProcessLock(
     options.paths.refreshLock,
     async () => {
-      const completedAt = now();
-      const [installed, config, recipe, state] = await Promise.all([
+      const startedAt = now();
+      const config = await requiredJson(options.paths.config, parseConfig, "Configuration");
+      const [installed, state] = await Promise.all([
         hasInstallationMarker(options.paths.installationMarker),
-        requiredJson(options.paths.config, parseConfig, "Configuration"),
-        requiredJson(options.paths.recipe, parseRequestRecipe, "Request recipe"),
         requiredJson(options.paths.runtimeState, parseRuntimeState, "Runtime state"),
       ]);
       if (!installed) {
         throw new DogerError("CONFIG_INVALID", "Doger installation marker is missing. Run doger init first.");
       }
-      if (!hostBoundaryApproved(config, recipe)) {
-        const nextState = recordOutcome(state, "MANUAL_CHECK", completedAt);
-        await writeJsonAtomic(options.paths.runtimeState, nextState);
-        return {
-          schemaVersion: 1,
-          command: "refresh",
-          outcome: "MANUAL_CHECK",
-          attempted: false,
-          attempts: 0,
-          completedAt: completedAt.toISOString(),
-          nextEligibleAt: nextState.nextEligibleAt,
-          reason: "host_not_approved",
-        };
-      }
 
       const blocked = blockedOutcome(state);
-      if (blocked !== null) {
-        return {
-          schemaVersion: 1,
-          command: "refresh",
-          outcome: blocked,
-          attempted: false,
-          attempts: 0,
-          completedAt: completedAt.toISOString(),
-          nextEligibleAt: state.nextEligibleAt,
-          reason: "blocked_state",
-        };
+      if (blocked !== null) return skippedReport(state, startedAt, blocked, "blocked_state");
+      const due = dueDecision(state, startedAt);
+      if (!due.due) return skippedReport(state, startedAt, "NOT_DUE", "local_schedule_guard");
+
+      const curlOptions = options.refreshClient?.curl ?? {};
+      validateRefreshEndpoint(curlOptions.endpoint ?? JD_REFRESH_ENDPOINT, {
+        ...(curlOptions.allowLoopbackForTests === undefined
+          ? {}
+          : { allowLoopbackForTests: curlOptions.allowLoopbackForTests }),
+      });
+
+      const storedToken = await options.tokenStore.get();
+      let token: string | null = null;
+      try {
+        token = storedToken === null ? null : validateToken(storedToken);
+      } catch (error) {
+        if (!(error instanceof DogerError) || error.code !== "TOKEN_INVALID") throw error;
+      }
+      if (token === null) {
+        const nextState = recordOutcome(state, "REAUTH_REQUIRED", startedAt);
+        await writeJsonAtomic(options.paths.runtimeState, nextState);
+        return skippedReport(nextState, startedAt, "REAUTH_REQUIRED", "token_missing");
       }
 
-      const due = dueDecision(state, completedAt);
-      if (!due.due) {
-        return {
-          schemaVersion: 1,
-          command: "refresh",
-          outcome: "NOT_DUE",
-          attempted: false,
-          attempts: 0,
-          completedAt: completedAt.toISOString(),
-          nextEligibleAt: due.nextEligibleAt,
-          reason: "local_schedule_guard",
-        };
-      }
-
-      const credentials = await new EncryptedCredentialStore(options.paths.credentials, options.keyProvider).load();
-      if (credentials === null) {
-        throw new DogerError("CREDENTIALS_MISSING", "Encrypted credentials are missing. Run doger reauth.");
-      }
-
-      const result = await executeRefresh(recipe, credentials, {
+      const result = await executeRefresh(config.deliveryRecordId, token, {
         ...options.refreshClient,
         now,
       });
-      const persistedAt = now();
-      const nextState =
-        result.classification.outcome === "SUCCESS"
-          ? recordSuccess(state, persistedAt)
-          : recordOutcome(state, result.classification.outcome, persistedAt, {
-              ...(result.classification.retryAfterAt === undefined
-                ? {}
-                : { retryAfterAt: result.classification.retryAfterAt }),
-            });
+      const completedAt = now();
+      const nextState = result.classification.outcome === "SUCCESS"
+        ? recordSuccess(state, completedAt)
+        : recordOutcome(state, result.classification.outcome, completedAt, {
+            ...(result.classification.retryAfterAt === undefined
+              ? {}
+              : { retryAfterAt: result.classification.retryAfterAt }),
+          });
       await writeJsonAtomic(options.paths.runtimeState, nextState);
-
       return {
-        schemaVersion: 1,
+        schemaVersion: REPORT_SCHEMA_VERSION,
         command: "refresh",
         outcome: result.classification.outcome,
         attempted: true,
-        attempts: result.attempts,
-        completedAt: persistedAt.toISOString(),
+        attempts: 1,
+        completedAt: completedAt.toISOString(),
         nextEligibleAt: nextState.nextEligibleAt,
         reason: result.classification.reason,
         ...(result.classification.retryAfterAt === undefined

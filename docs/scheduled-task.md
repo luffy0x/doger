@@ -4,22 +4,23 @@ Doger uses a Codex Scheduled Task for recurrence; it does not install a daemon, 
 
 ## Preconditions
 
-1. Complete `doger init` and confirm one successful refresh.
-2. Run `npm run --silent doger -- status --json` and confirm `initialized` is `true`.
-3. Use `nextEligibleAt` as the first scheduled run time. This is exactly eight hours after the immutable first-success anchor.
+1. Complete local-only `doger init`.
+2. Explicitly authorize and run one `doger refresh --json`.
+3. Confirm that refresh returned `SUCCESS` and `doger status --json` reports `scheduleAnchored: true`.
+4. Use `nextEligibleAt` as the first scheduled run time. It is exactly eight hours after the first confirmed success.
 
-Do not create the task before initialization succeeds. For local scheduled execution, the computer must be on, Codex Desktop must be running, and this repository must remain available.
+Do not create the task after `init` alone. The computer must be on, Codex Desktop must be running, and this repository must remain available when the task is due.
 
 ## Durable prompt
 
-Use this prompt verbatim for a task scheduled inside the current Codex task and attached to the local `doger` project:
+Use this prompt for a task attached to the local `doger` project:
 
 ```text
-Use $doger for this run. From the local doger project, execute `npm run --silent doger -- refresh --json` exactly once and report only the redacted JSON outcome. Do not inspect configuration, recipe, credential, Keychain, browser, or raw response data. Do not construct curl commands and do not add retries. If the outcome is REAUTH_REQUIRED, RATE_LIMITED, TRANSIENT_FAILURE, or MANUAL_CHECK, report it with the safe next action defined by $doger. Never run init, reauth, uninstall, or agent-browser unattended.
+Use $doger for this run. From the local doger project, execute `npm run --silent doger -- refresh --json` exactly once and report only the redacted JSON outcome. Do not inspect configuration, the operating-system credential store, temporary files, browser state, or raw response data. Do not construct curl commands and do not add retries. If the outcome is REAUTH_REQUIRED, RATE_LIMITED, TRANSIENT_FAILURE, or MANUAL_CHECK, report it with the safe next action defined by $doger. Never run init, reauth, or uninstall unattended.
 ```
 
-Configure the task to repeat every eight hours, beginning at `nextEligibleAt`, and run it in the local project rather than a generated worktree. Doger's persisted due guard remains authoritative if a task is duplicated, delayed, or triggered early.
+Configure an eight-hour cadence beginning at `nextEligibleAt` and run it in the saved local project rather than a generated worktree. Doger's persisted due guard remains authoritative if a task is duplicated, delayed, or triggered early.
 
-After creation, run the prompt once manually and review the first two scheduled results before treating the automation as stable. A `REAUTH_REQUIRED` result only notifies the user; reauthentication remains a separate explicit action.
+Review the first two scheduled results before treating the automation as stable. `REAUTH_REQUIRED` only notifies the user; Token replacement remains a separate explicit local action.
 
 Codex Scheduled Tasks are managed in the desktop app, not the CLI. See the [official Scheduled Tasks documentation](https://learn.chatgpt.com/docs/automations).

@@ -4,10 +4,10 @@ context: |
   Project: doger, a jd-activity-keeper.
   Product shape: a Windows-and-macOS, local-only Codex skill backed by deterministic TypeScript scripts.
   Scheduling: a Codex scheduled task runs every eight hours, anchored to the first confirmed successful refresh.
-  Authentication: agent-browser is used for interactive bootstrap and explicit reauthentication only.
-  Execution: routine refreshes use curl; credentials must never enter model context, logs, command arguments, fixtures, or version control.
+  Authentication: the user supplies the long-lived Cookie request-header value used by the verified JD refresh as a Token through a hidden local terminal prompt; Doger stores it directly in macOS Keychain or Windows Credential Manager.
+  Execution: a fixed JD adapter sends the configured delivery-record ID with curl; the token must never enter model context, logs, command arguments, fixtures, or version control.
   MVP scope: one JD account and one application record.
-  Runtime: Node.js 24, TypeScript, curl, agent-browser, macOS Keychain or Windows Credential Manager.
+  Runtime: Node.js 24, TypeScript, curl, macOS Keychain or Windows Credential Manager.
 
 rules:
   proposal:
@@ -15,10 +15,10 @@ rules:
     - Include security and rollback impact.
   specs:
     - Use SHALL requirements and WHEN/THEN scenarios.
-    - Cover success, authentication expiry, rate limiting, ambiguous responses, missed schedules, and secret redaction.
+    - Cover token provisioning, success, authentication expiry, rate limiting, ambiguous responses, missed schedules, and secret redaction.
   design:
     - Keep deterministic code responsible for credentials and HTTP execution; Codex only orchestrates and reports redacted outcomes.
-    - Include architecture and sequence diagrams for scheduled and reauthentication flows.
+    - Include architecture and sequence diagrams for initialization, scheduled refresh, and token replacement flows.
   tasks:
     - Keep each task independently verifiable.
     - Require mock-based tests before any live JD request.

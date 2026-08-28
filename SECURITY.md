@@ -6,24 +6,29 @@ Doger is pre-release software. Only the current `main` branch receives security 
 
 ## Reporting a Vulnerability
 
-Do not include JD cookies, authorization headers, CSRF values, passwords, OTPs, raw HAR files, or production response bodies in a public issue.
+Do not include JD Cookies, Tokens, passwords, OTPs, delivery-record IDs, raw HAR files, request headers, or production response bodies in a public issue. Use GitHub's private security advisory flow and synthetic local-Mock reproductions whenever possible.
 
-Report a vulnerability through GitHub's private security advisory flow for this repository. Include reproduction steps using synthetic credentials and a local mock server whenever possible.
+## Token Handling
 
-## Credential Handling
+Doger treats the complete Cookie request-header value used by the verified refresh request as the authentication Token.
 
-Doger is designed to keep authentication material outside model context, process arguments, logs, fixtures, and Git. Credentials are encrypted locally, and the encryption key is stored in macOS Keychain or Windows Credential Manager.
+- `init` and `reauth` accept it only through an echo-suppressed interactive terminal prompt.
+- The Token is stored directly in macOS Keychain or Windows Credential Manager through `@napi-rs/keyring`.
+- No encrypted credential file, exported browser state, or separate encryption key is written.
+- Routine refreshes pass the Token to `curl --disable --config -` through stdin, never argv or environment variables.
+- Curl response files are private temporary files and are removed after bounded parsing.
+- CLI JSON, errors, status, tests, documentation, and Git omit the Token, delivery-record ID, request data, and raw JD response.
 
-On macOS, persisted files use owner-only POSIX permissions. On Windows, Doger stores them beneath the current user's LocalAppData directory and relies on the user-profile ACL together with encrypted credential contents. The threat model does not include a compromised logged-in user or an administrator account.
+On macOS, persisted JSON uses owner-only POSIX permissions. On Windows, data is stored under the current user's LocalAppData directory and protected by the user-profile ACL. The threat model does not include a compromised logged-in user or administrator account.
 
-Routine refreshes pass sensitive curl configuration through stdin and disable ambient user curl configuration files. This prevents options from `.curlrc` from tracing credentials or changing the guarded request.
+The repository `$doger` Skill and Scheduled Task consume only redacted CLI JSON. They must not inspect local configuration, the operating-system credential store, temporary response data, or browser state and must not reconstruct curl commands.
 
-Interactive authentication uses a fresh allowlisted agent-browser session. Browser restore, profile reuse, state replay, auto-connect, and CDP attachment are deliberately disabled because they are incompatible with agent-browser's domain-containment guarantee. Inherited `AGENT_BROWSER_*` and `NODE_OPTIONS` variables are stripped case-insensitively before launch so Windows environment-key semantics cannot bypass that boundary. The browser session is closed after capture and is not persisted.
+Initialization writes a Doger ownership marker before creating configuration or credential state. Uninstall removes known files only when that marker is valid; without it, same-named filesystem entries are preserved while Doger's fixed native credential entries may still be cleaned.
 
-The repository `$doger` Skill and Scheduled Task must consume only the CLI's redacted JSON. They must not inspect local configuration, request recipe, encrypted credential, browser, operating-system credential store, or raw response data.
+If the Token may have been exposed, stop scheduled execution, sign out of the affected JD session, obtain a replacement locally, and run `doger reauth`.
 
-If credentials may have been exposed, stop scheduled execution, remove Doger's local state, sign out of the affected JD sessions, and authenticate again.
+## Network and Scope Boundaries
 
-## Scope Boundaries
+Doger sends only one fixed POST to `https://campus.jd.com/api/wx/resume/refresh`, does not follow redirects, and does not retry automatically. It requires the exact verified two-level JSON success signal before advancing state.
 
-Doger does not bypass CAPTCHA, device verification, dynamic signing, browser fingerprint checks, or platform risk controls. Users are responsible for using only their own account and complying with applicable platform terms.
+Doger does not automate login or token acquisition and does not bypass CAPTCHA, device verification, dynamic signing, browser fingerprint checks, or platform risk controls. Users are responsible for using only accounts they are authorized to use and complying with applicable platform terms.

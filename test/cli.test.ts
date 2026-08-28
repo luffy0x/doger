@@ -1,236 +1,152 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdtemp, rm, symlink } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import test from "node:test";
 
-import { EXIT_CODES, exitCodeForOutcome, helpText, run, VERSION, type CliDependencies } from "../src/cli.ts";
+import {
+  EXIT_CODES,
+  exitCodeForOutcome,
+  helpText,
+  readHiddenInput,
+  run,
+  VERSION,
+  type CliDependencies,
+  type HiddenInput,
+} from "../src/cli.ts";
 import { DogerError } from "../src/core/errors.ts";
 import type { RefreshReport } from "../src/core/refresh-service.ts";
 import type { RefreshOutcome } from "../src/core/state.ts";
 import { resolveDogerPaths } from "../src/infra/paths.ts";
-import type { KeyProvider } from "../src/security/key-provider.ts";
+import type { TokenStore } from "../src/security/token-store.ts";
 
 class Output {
   value = "";
-
-  write(chunk: string): void {
-    this.value += chunk;
-  }
+  write(chunk: string): void { this.value += chunk; }
 }
 
-class MemoryKeyProvider implements KeyProvider {
-  async get(): Promise<Uint8Array | null> {
-    return null;
-  }
-
+class MemoryTokenStore implements TokenStore {
+  async get(): Promise<string | null> { return null; }
   async set(): Promise<void> {}
-
   async delete(): Promise<void> {}
+}
+
+class FakeHiddenInput extends EventEmitter implements HiddenInput {
+  isTTY = true;
+  isRaw = false;
+  resumed = false;
+  setEncoding(): this { return this; }
+  setRawMode(value: boolean): this { this.isRaw = value; return this; }
+  resume(): this { this.resumed = true; return this; }
+  pause(): this { this.resumed = false; return this; }
 }
 
 function refreshReport(outcome: RefreshOutcome): RefreshReport {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     command: "refresh",
     outcome,
-    attempted: outcome !== "NOT_DUE" && outcome !== "REAUTH_REQUIRED" && outcome !== "MANUAL_CHECK",
-    attempts: outcome === "NOT_DUE" ? 0 : 1,
+    attempted: outcome === "SUCCESS" || outcome === "RATE_LIMITED" || outcome === "TRANSIENT_FAILURE",
+    attempts: outcome === "SUCCESS" || outcome === "RATE_LIMITED" || outcome === "TRANSIENT_FAILURE" ? 1 : 0,
     completedAt: "2026-08-28T08:00:00.000Z",
-    nextEligibleAt: "2026-08-28T16:00:00.000Z",
+    nextEligibleAt: null,
     reason: "synthetic_reason",
   };
 }
 
-function harness(overrides: CliDependencies = {}): {
-  readonly dependencies: CliDependencies;
-  readonly stderr: Output;
-  readonly stdout: Output;
-} {
+function harness(overrides: CliDependencies = {}) {
   const stdout = new Output();
   const stderr = new Output();
   return {
     stdout,
     stderr,
     dependencies: {
-      keyProvider: new MemoryKeyProvider(),
-      paths: resolveDogerPaths({ env: { DOGER_DATA_DIR: "/tmp/doger-cli-test" } }),
+      tokenStore: new MemoryTokenStore(),
+      paths: resolveDogerPaths({ env: { DOGER_DATA_DIR: join(tmpdir(), "doger-cli-test") } }),
       stdout,
       stderr,
       ...overrides,
-    },
+    } satisfies CliDependencies,
   };
 }
 
-test("help identifies Doger and all CLI commands", () => {
+test("help describes local token configuration and all commands", () => {
   const help = helpText();
-
   assert.match(help, /doger, a jd-activity-keeper/);
-  assert.match(help, /Usage: doger <command>/);
+  assert.match(help, /init\s+Configure one delivery record and token locally/);
   for (const command of ["init", "refresh", "status", "reauth", "doctor", "uninstall"]) {
     assert.match(help, new RegExp(`\\b${command}\\b`));
   }
-});
-
-test("version is a valid semantic version", () => {
   assert.match(VERSION, /^\d+\.\d+\.\d+$/);
-});
-
-test("runs when invoked through a package-manager-style symlink", async (context) => {
-  const root = await mkdtemp(join(tmpdir(), "doger-cli-entrypoint-"));
-  context.after(() => rm(root, { recursive: true, force: true }));
-  const entrypoint = join(root, "doger");
-  await symlink(fileURLToPath(new URL("../src/cli.ts", import.meta.url)), entrypoint);
-
-  const result = await new Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }>(
-    (resolve, reject) => {
-      const child = spawn(process.execPath, ["--experimental-strip-types", entrypoint, "version"], {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => {
-        stdout += chunk;
-      });
-      child.stderr.on("data", (chunk: string) => {
-        stderr += chunk;
-      });
-      child.once("error", reject);
-      child.once("close", (code) => resolve({ code, stderr, stdout }));
-    },
-  );
-
-  assert.deepEqual(result, { code: 0, stderr: "", stdout: `${VERSION}\n` });
 });
 
 test("maps every refresh outcome to a distinct stable exit code", async () => {
   const expected = new Map<RefreshOutcome, number>([
-    ["SUCCESS", EXIT_CODES.SUCCESS],
-    ["NOT_DUE", EXIT_CODES.NOT_DUE],
-    ["REAUTH_REQUIRED", EXIT_CODES.REAUTH_REQUIRED],
-    ["RATE_LIMITED", EXIT_CODES.RATE_LIMITED],
-    ["TRANSIENT_FAILURE", EXIT_CODES.TRANSIENT_FAILURE],
-    ["MANUAL_CHECK", EXIT_CODES.MANUAL_CHECK],
+    ["SUCCESS", EXIT_CODES.SUCCESS], ["NOT_DUE", EXIT_CODES.NOT_DUE],
+    ["REAUTH_REQUIRED", EXIT_CODES.REAUTH_REQUIRED], ["RATE_LIMITED", EXIT_CODES.RATE_LIMITED],
+    ["TRANSIENT_FAILURE", EXIT_CODES.TRANSIENT_FAILURE], ["MANUAL_CHECK", EXIT_CODES.MANUAL_CHECK],
   ]);
   assert.equal(new Set(expected.values()).size, expected.size);
-
   for (const [outcome, exitCode] of expected) {
-    const { dependencies, stdout } = harness({
-      services: { refresh: async () => refreshReport(outcome) },
-    });
+    const { dependencies, stdout } = harness({ services: { refresh: async () => refreshReport(outcome) } });
     assert.equal(await run(["refresh", "--json"], dependencies), exitCode);
     assert.equal(JSON.parse(stdout.value).outcome, outcome);
     assert.equal(exitCodeForOutcome(outcome), exitCode);
   }
 });
 
-test("redacts subprocess diagnostics from JSON errors", async () => {
-  const secret = "synthetic-secret-response-body";
+test("init accepts no secret-bearing arguments and uses injected local prompts", async () => {
+  let calls = 0;
+  const { dependencies, stdout } = harness({
+    prompts: {
+      async readDeliveryRecordId() { return "1234567"; },
+      async readToken() { return "session=synthetic-token"; },
+      async confirmUninstall() { return false; },
+    },
+    services: {
+      initialize: async () => {
+        calls += 1;
+        return { schemaVersion: 2, command: "init", outcome: "SUCCESS", scheduleAnchored: false };
+      },
+    },
+  });
+  assert.equal(await run(["init", "--json"], dependencies), EXIT_CODES.SUCCESS);
+  assert.equal(calls, 1);
+  assert.equal(JSON.parse(stdout.value).scheduleAnchored, false);
+
+  const rejected = harness();
+  assert.equal(await run(["init", "secret", "--json"], rejected.dependencies), EXIT_CODES.CONFIGURATION_FAILURE);
+  assert.equal(rejected.stdout.value.includes("secret"), false);
+});
+
+test("hidden token input never echoes the token", async () => {
+  const input = new FakeHiddenInput();
+  const output = new Output();
+  const pending = readHiddenInput(input, output, "Token: ");
+  input.emit("data", "session=synthetic-token\r");
+  assert.equal(await pending, "session=synthetic-token");
+  assert.equal(output.value, "Token: \n");
+  assert.equal(input.isRaw, false);
+});
+
+test("redacts internal errors and unknown command text", async () => {
+  const secret = "synthetic-private-response";
   const { dependencies, stdout, stderr } = harness({
-    services: {
-      refresh: async () => {
-        throw new DogerError("CURL_EXECUTION_FAILED", secret);
-      },
-    },
+    services: { refresh: async () => { throw new DogerError("CURL_EXECUTION_FAILED", secret); } },
   });
-
   assert.equal(await run(["refresh", "--json"], dependencies), EXIT_CODES.TRANSIENT_FAILURE);
-  assert.equal(stdout.value.includes(secret), false);
-  assert.equal(stderr.value.includes(secret), false);
-  assert.deepEqual(JSON.parse(stdout.value), {
-    schemaVersion: 1,
-    command: "refresh",
-    outcome: "TRANSIENT_FAILURE",
-    error: { code: "CURL_EXECUTION_FAILED", message: "The local curl process failed." },
-  });
+  assert.equal(`${stdout.value}${stderr.value}`.includes(secret), false);
+
+  const unknown = harness();
+  assert.equal(await run(["synthetic-secret-command", "--json"], unknown.dependencies), EXIT_CODES.CONFIGURATION_FAILURE);
+  assert.equal(unknown.stdout.value.includes("synthetic-secret-command"), false);
 });
 
-test("runs init only with one URL and injected interactive prompts", async () => {
-  let initializedUrl: string | undefined;
-  const { dependencies, stdout } = harness({
-    prompts: {
-      async waitForLogin() {},
-      async confirmRefresh() {
-        return true;
-      },
-      async waitForRefresh() {},
-      async confirmUninstall() {
-        return false;
-      },
-    },
-    services: {
-      initialize: async (applicationUrl) => {
-        initializedUrl = applicationUrl;
-        return { schemaVersion: 1, command: "init", outcome: "CANCELLED" };
-      },
-    },
-  });
-
-  assert.equal(
-    await run(["init", "https://campus.jd.com/application", "--json"], dependencies),
-    EXIT_CODES.SUCCESS,
-  );
-  assert.equal(initializedUrl, "https://campus.jd.com/application");
-  assert.equal(JSON.parse(stdout.value).outcome, "CANCELLED");
-});
-
-test("uninstall cancellation does not invoke destructive cleanup", async () => {
-  let uninstallCalls = 0;
-  const { dependencies, stdout } = harness({
-    prompts: {
-      async waitForLogin() {},
-      async confirmRefresh() {
-        return false;
-      },
-      async waitForRefresh() {},
-      async confirmUninstall() {
-        return false;
-      },
-    },
-    services: {
-      uninstall: async () => {
-        uninstallCalls += 1;
-        throw new Error("must not run");
-      },
-    },
-  });
-
-  assert.equal(await run(["uninstall", "--json"], dependencies), EXIT_CODES.SUCCESS);
-  assert.equal(uninstallCalls, 0);
-  assert.equal(JSON.parse(stdout.value).outcome, "CANCELLED");
-});
-
-test("status JSON is redacted when Doger is not initialized", async (context) => {
+test("status JSON never contains a delivery-record field", async (context) => {
   const root = await mkdtemp(join(tmpdir(), "doger-cli-status-"));
   context.after(() => rm(root, { recursive: true, force: true }));
   const { dependencies, stdout } = harness({ paths: resolveDogerPaths({ env: { DOGER_DATA_DIR: root } }) });
-
   assert.equal(await run(["status", "--json"], dependencies), EXIT_CODES.SUCCESS);
-  const report = JSON.parse(stdout.value);
-  assert.equal(report.initialized, false);
-  assert.deepEqual(Object.keys(report).sort(), [
-    "command",
-    "credentialRevision",
-    "files",
-    "firstSuccessAt",
-    "initialized",
-    "lastAttemptAt",
-    "lastOutcome",
-    "lastSuccessAt",
-    "nextEligibleAt",
-    "recipeRevision",
-    "schemaVersion",
-    "status",
-  ]);
-});
-
-test("unknown commands return a redacted configuration failure", async () => {
-  const { dependencies, stdout } = harness();
-  assert.equal(await run(["synthetic-secret-command", "--json"], dependencies), EXIT_CODES.CONFIGURATION_FAILURE);
-  assert.equal(stdout.value.includes("synthetic-secret-command"), false);
-  assert.equal(JSON.parse(stdout.value).command, "unknown");
+  assert.equal(stdout.value.includes("deliveryRecordId"), false);
 });

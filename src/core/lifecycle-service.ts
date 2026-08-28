@@ -1,90 +1,76 @@
 import { access, rmdir, unlink } from "node:fs/promises";
+import { join } from "node:path";
 
-import { AgentBrowserSession } from "../browser/agent-browser.ts";
-import { captureRefreshRequest, type CaptureBrowserSession, type NormalizedCapture } from "../browser/capture.ts";
-import { parseRequestRecipe } from "../http/recipe.ts";
 import { readJsonFile, writeJsonAtomic } from "../infra/json-store.ts";
 import { hasInstallationMarker, writeInstallationMarker } from "../infra/installation.ts";
 import { withProcessLock } from "../infra/lock.ts";
 import type { DogerPaths } from "../infra/paths.ts";
-import { EncryptedCredentialStore } from "../security/credential-store.ts";
-import { parseEncryptedEnvelope } from "../security/crypto.ts";
-import type { KeyProvider } from "../security/key-provider.ts";
-import { createConfig, parseConfig, type DogerConfig } from "./config.ts";
+import { KeyringTokenStore, validateToken, type TokenStore } from "../security/token-store.ts";
+import { createConfig, parseConfig } from "./config.ts";
 import { DogerError } from "./errors.ts";
+import { REPORT_SCHEMA_VERSION } from "./report.ts";
 import {
+  createConfiguredState,
   createInitialState,
   parseRuntimeState,
-  recordOutcome,
-  recordSuccess,
-  withRevisions,
+  recordTokenReplacement,
   type RuntimeState,
 } from "./state.ts";
 
-export interface InteractiveCaptureSession extends CaptureBrowserSession {
-  clearNetworkRequests(): Promise<void>;
-  close(): Promise<void>;
-  open(applicationUrl: string): Promise<void>;
-}
-
-export interface InteractiveCapturePrompts {
-  waitForLogin(): Promise<void>;
-  confirmRefresh(): Promise<boolean>;
-  waitForRefresh(): Promise<void>;
+export interface ConfigurationPrompts {
+  readDeliveryRecordId(): Promise<string>;
+  readToken(): Promise<string>;
 }
 
 export interface LifecycleOptions {
-  readonly browserFactory?: (applicationUrl: string) => InteractiveCaptureSession;
-  readonly keyProvider: KeyProvider;
-  readonly now?: () => Date;
   readonly paths: DogerPaths;
-  readonly prompts: InteractiveCapturePrompts;
+  readonly prompts: ConfigurationPrompts;
+  readonly tokenStore: TokenStore;
 }
 
 export interface LifecycleReport {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof REPORT_SCHEMA_VERSION;
   readonly command: "init" | "reauth";
-  readonly outcome: "SUCCESS" | "CANCELLED";
-  readonly firstSuccessAt?: string;
-  readonly nextEligibleAt?: string;
-  readonly recipeRevision?: number;
-  readonly credentialRevision?: number;
+  readonly outcome: "SUCCESS";
+  readonly scheduleAnchored: boolean;
 }
 
 export interface StatusReport {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof REPORT_SCHEMA_VERSION;
   readonly command: "status";
   readonly initialized: boolean;
+  readonly scheduleAnchored: boolean;
   readonly status: RuntimeState["status"];
   readonly firstSuccessAt: string | null;
   readonly lastSuccessAt: string | null;
   readonly nextEligibleAt: string | null;
   readonly lastAttemptAt: string | null;
   readonly lastOutcome: RuntimeState["lastOutcome"];
-  readonly recipeRevision: number;
-  readonly credentialRevision: number;
   readonly files: {
     readonly config: boolean;
-    readonly recipe: boolean;
-    readonly credentials: boolean;
+    readonly runtimeState: boolean;
     readonly installationMarker: boolean;
   };
 }
 
 export interface UninstallReport {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof REPORT_SCHEMA_VERSION;
   readonly command: "uninstall";
   readonly outcome: "SUCCESS";
   readonly removed: {
     readonly config: boolean;
-    readonly recipe: boolean;
     readonly runtimeState: boolean;
-    readonly credentials: boolean;
-    readonly keychainEntry: boolean;
+    readonly token: boolean;
+    readonly legacyCredentialKey: boolean;
+    readonly legacyData: boolean;
     readonly installationMarker: boolean;
     readonly refreshLock: boolean;
   };
   readonly scheduledTaskRequiresCodexRemoval: true;
+}
+
+function legacyPaths(paths: DogerPaths): readonly string[] {
+  return [join(paths.root, "recipe.json"), join(paths.root, "credentials.enc")];
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -92,9 +78,7 @@ async function fileExists(path: string): Promise<boolean> {
     await access(path);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw new DogerError("STORAGE_ERROR", "Unable to inspect Doger local data.");
   }
 }
@@ -104,189 +88,129 @@ async function unlinkKnown(path: string): Promise<boolean> {
     await unlink(path);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw new DogerError("STORAGE_ERROR", "Unable to remove Doger local data.");
   }
 }
 
-function approveRecipeHosts(config: DogerConfig, capture: NormalizedCapture): DogerConfig {
-  return parseConfig({
-    ...config,
-    allowedHosts: [...new Set([...config.allowedHosts, ...capture.recipe.allowedHosts])],
-  });
-}
-
-async function runInteractiveCapture(
-  config: DogerConfig,
-  options: LifecycleOptions,
-): Promise<{ readonly capture: NormalizedCapture; readonly capturedAt: Date } | null> {
-  const session = (options.browserFactory ?? ((url) => new AgentBrowserSession(url)))(config.applicationUrl);
-  let captured: { readonly capture: NormalizedCapture; readonly capturedAt: Date } | null = null;
-
-  try {
-    await session.open(config.applicationUrl);
-    await options.prompts.waitForLogin();
-    await session.clearNetworkRequests();
-    if (!(await options.prompts.confirmRefresh())) {
-      return null;
-    }
-    await options.prompts.waitForRefresh();
-    const capturedAt = (options.now ?? (() => new Date()))();
-    captured = { capture: await captureRefreshRequest(session, capturedAt), capturedAt };
-  } finally {
-    await session.close();
+async function rollbackInitialization(paths: DogerPaths, tokenStore: TokenStore): Promise<void> {
+  const cleanup = await Promise.allSettled([
+    unlinkKnown(paths.config),
+    unlinkKnown(paths.runtimeState),
+    tokenStore.delete(),
+  ]);
+  if (cleanup.every((result) => result.status === "fulfilled")) {
+    await unlinkKnown(paths.installationMarker).catch(() => undefined);
   }
-
-  return captured;
 }
 
-async function persistCapture(
-  config: DogerConfig,
-  baseState: RuntimeState,
-  capture: NormalizedCapture,
-  capturedAt: Date,
-  options: LifecycleOptions,
-): Promise<RuntimeState> {
-  const nextConfig = approveRecipeHosts(config, capture);
-  const gateState = recordOutcome(baseState, "MANUAL_CHECK", capturedAt);
-  const nextState = withRevisions(recordSuccess(baseState, capturedAt), {
-    recipeRevision: baseState.recipeRevision + 1,
-    credentialRevision: baseState.credentialRevision + 1,
-  });
-
-  await writeInstallationMarker(options.paths.installationMarker);
-  await writeJsonAtomic(options.paths.runtimeState, gateState);
-  await writeJsonAtomic(options.paths.config, nextConfig);
-  await writeJsonAtomic(options.paths.recipe, capture.recipe);
-  await new EncryptedCredentialStore(options.paths.credentials, options.keyProvider).save(capture.credentials);
-  await writeJsonAtomic(options.paths.runtimeState, nextState);
-  return nextState;
-}
-
-function successReport(command: "init" | "reauth", state: RuntimeState): LifecycleReport {
-  if (state.firstSuccessAt === null || state.nextEligibleAt === null) {
-    throw new DogerError("STATE_INVALID", "Successful initialization did not produce a schedule anchor.");
-  }
-  return {
-    schemaVersion: 1,
-    command,
-    outcome: "SUCCESS",
-    firstSuccessAt: state.firstSuccessAt,
-    nextEligibleAt: state.nextEligibleAt,
-    recipeRevision: state.recipeRevision,
-    credentialRevision: state.credentialRevision,
-  };
-}
-
-export async function initializeDoger(applicationUrl: string, options: LifecycleOptions): Promise<LifecycleReport> {
+export async function initializeDoger(options: LifecycleOptions): Promise<LifecycleReport> {
   return await withProcessLock(options.paths.refreshLock, async () => {
-    const existingData = await Promise.all([
+    const knownState = await Promise.all([
       hasInstallationMarker(options.paths.installationMarker),
       fileExists(options.paths.config),
-      fileExists(options.paths.recipe),
       fileExists(options.paths.runtimeState),
-      fileExists(options.paths.credentials),
+      ...legacyPaths(options.paths).map(fileExists),
     ]);
-    if (existingData.some(Boolean)) {
-      throw new DogerError(
-        "CONFIG_INVALID",
-        "Doger local data already exists. Run doger doctor or uninstall before initializing.",
-      );
+    const tokenExists = (await options.tokenStore.get()) !== null;
+    if (knownState.some(Boolean) || tokenExists) {
+      throw new DogerError("CONFIG_INVALID", "Doger local data already exists. Run doger uninstall first.");
     }
 
-    const config = createConfig(applicationUrl);
-    const result = await runInteractiveCapture(config, options);
-    if (result === null) {
-      return { schemaVersion: 1, command: "init", outcome: "CANCELLED" };
+    const config = createConfig(await options.prompts.readDeliveryRecordId());
+    const token = validateToken(await options.prompts.readToken());
+    try {
+      await writeInstallationMarker(options.paths.installationMarker);
+      await options.tokenStore.set(token);
+      await writeJsonAtomic(options.paths.config, config);
+      await writeJsonAtomic(options.paths.runtimeState, createConfiguredState());
+    } catch (error) {
+      await rollbackInitialization(options.paths, options.tokenStore);
+      throw error;
     }
-    const state = await persistCapture(config, createInitialState(), result.capture, result.capturedAt, options);
-    return successReport("init", state);
+    return { schemaVersion: REPORT_SCHEMA_VERSION, command: "init", outcome: "SUCCESS", scheduleAnchored: false };
   });
 }
 
 export async function reauthenticateDoger(options: LifecycleOptions): Promise<LifecycleReport> {
   return await withProcessLock(options.paths.refreshLock, async () => {
-    const [installed, config, state] = await Promise.all([
+    const config = await readJsonFile(options.paths.config, parseConfig);
+    const [installed, state, previousToken] = await Promise.all([
       hasInstallationMarker(options.paths.installationMarker),
-      readJsonFile(options.paths.config, parseConfig),
       readJsonFile(options.paths.runtimeState, parseRuntimeState),
+      options.tokenStore.get(),
     ]);
-    if (!installed || config === null || state === null || state.firstSuccessAt === null) {
+    if (!installed || config === null || state === null || state.status === "uninitialized") {
       throw new DogerError("CONFIG_INVALID", "Doger is not initialized. Run doger init first.");
     }
 
-    const result = await runInteractiveCapture(config, options);
-    if (result === null) {
-      return { schemaVersion: 1, command: "reauth", outcome: "CANCELLED" };
+    const token = validateToken(await options.prompts.readToken());
+    try {
+      await options.tokenStore.set(token);
+      const nextState = recordTokenReplacement(state);
+      if (nextState !== state) await writeJsonAtomic(options.paths.runtimeState, nextState);
+      return {
+        schemaVersion: REPORT_SCHEMA_VERSION,
+        command: "reauth",
+        outcome: "SUCCESS",
+        scheduleAnchored: nextState.firstSuccessAt !== null,
+      };
+    } catch (error) {
+      if (previousToken === null) await options.tokenStore.delete().catch(() => undefined);
+      else await options.tokenStore.set(previousToken).catch(() => undefined);
+      throw error;
     }
-    const nextState = await persistCapture(config, state, result.capture, result.capturedAt, options);
-    return successReport("reauth", nextState);
   });
 }
 
 export async function readStatus(paths: DogerPaths): Promise<StatusReport> {
-  const [state, installationMarker, config, recipe, credentials] = await Promise.all([
+  const configPresent = await readJsonFile(paths.config, parseConfig);
+  const [state, installationMarker] = await Promise.all([
     readJsonFile(paths.runtimeState, parseRuntimeState),
     hasInstallationMarker(paths.installationMarker),
-    readJsonFile(paths.config, parseConfig),
-    readJsonFile(paths.recipe, parseRequestRecipe),
-    readJsonFile(paths.credentials, parseEncryptedEnvelope),
   ]);
   const current = state ?? createInitialState();
-  const configPresent = config !== null;
-  const recipePresent = recipe !== null;
-  const credentialsPresent = credentials !== null;
-
+  const hasConfig = configPresent !== null;
+  const initialized = installationMarker && hasConfig && state !== null && state.status !== "uninitialized";
   return {
-    schemaVersion: 1,
+    schemaVersion: REPORT_SCHEMA_VERSION,
     command: "status",
-    initialized:
-      current.firstSuccessAt !== null &&
-      installationMarker &&
-      configPresent &&
-      recipePresent &&
-      credentialsPresent,
+    initialized,
+    scheduleAnchored: initialized && current.firstSuccessAt !== null,
     status: current.status,
     firstSuccessAt: current.firstSuccessAt,
     lastSuccessAt: current.lastSuccessAt,
     nextEligibleAt: current.nextEligibleAt,
     lastAttemptAt: current.lastAttemptAt,
     lastOutcome: current.lastOutcome,
-    recipeRevision: current.recipeRevision,
-    credentialRevision: current.credentialRevision,
-    files: {
-      config: configPresent,
-      recipe: recipePresent,
-      credentials: credentialsPresent,
-      installationMarker,
-    },
+    files: { config: hasConfig, runtimeState: state !== null, installationMarker },
   };
 }
 
-export async function uninstallLocalData(paths: DogerPaths, keyProvider: KeyProvider): Promise<UninstallReport> {
+export async function uninstallLocalData(
+  paths: DogerPaths,
+  tokenStore: TokenStore,
+  legacyKeyStore: TokenStore = new KeyringTokenStore("doger", "credential-encryption-key"),
+): Promise<UninstallReport> {
   const report = await withProcessLock(paths.refreshLock, async () => {
-    if (!(await hasInstallationMarker(paths.installationMarker))) {
-      const knownDataExists = await Promise.all([
-        fileExists(paths.config),
-        fileExists(paths.recipe),
-        fileExists(paths.runtimeState),
-        fileExists(paths.credentials),
-      ]);
-      if (knownDataExists.some(Boolean)) {
-        throw new DogerError("STORAGE_ERROR", "Refusing to remove an unrecognized data directory.");
-      }
+    const [installed, token, legacyKeyStoreValue] = await Promise.all([
+      hasInstallationMarker(paths.installationMarker),
+      tokenStore.get(),
+      legacyKeyStore.get(),
+    ]);
+    if (!installed) {
+      if (token !== null) await tokenStore.delete();
+      if (legacyKeyStoreValue !== null) await legacyKeyStore.delete();
       return {
-        schemaVersion: 1,
+        schemaVersion: REPORT_SCHEMA_VERSION,
         command: "uninstall",
         outcome: "SUCCESS",
         removed: {
           config: false,
-          recipe: false,
           runtimeState: false,
-          credentials: false,
-          keychainEntry: false,
+          token: token !== null,
+          legacyCredentialKey: legacyKeyStoreValue !== null,
+          legacyData: false,
           installationMarker: false,
           refreshLock: false,
         },
@@ -294,21 +218,28 @@ export async function uninstallLocalData(paths: DogerPaths, keyProvider: KeyProv
       } as const;
     }
 
-    const credentials = await fileExists(paths.credentials);
-    const keychainEntry = (await keyProvider.get()) !== null;
-    await new EncryptedCredentialStore(paths.credentials, keyProvider).delete();
-    const [config, recipe, runtimeState] = await Promise.all([
-      unlinkKnown(paths.config),
-      unlinkKnown(paths.recipe),
-      unlinkKnown(paths.runtimeState),
-    ]);
-    const installationMarker = await unlinkKnown(paths.installationMarker);
-
+    if (token !== null) await tokenStore.delete();
+    if (legacyKeyStoreValue !== null) await legacyKeyStore.delete();
+    const removedConfig = await unlinkKnown(paths.config);
+    const removedRuntimeState = await unlinkKnown(paths.runtimeState);
+    let removedLegacyData = false;
+    for (const path of legacyPaths(paths)) {
+      removedLegacyData = (await unlinkKnown(path)) || removedLegacyData;
+    }
+    const removedMarker = await unlinkKnown(paths.installationMarker);
     return {
-      schemaVersion: 1,
+      schemaVersion: REPORT_SCHEMA_VERSION,
       command: "uninstall",
       outcome: "SUCCESS",
-      removed: { config, recipe, runtimeState, credentials, keychainEntry, installationMarker, refreshLock: true },
+      removed: {
+        config: removedConfig,
+        runtimeState: removedRuntimeState,
+        token: token !== null,
+        legacyCredentialKey: legacyKeyStoreValue !== null,
+        legacyData: removedLegacyData,
+        installationMarker: removedMarker,
+        refreshLock: true,
+      },
       scheduledTaskRequiresCodexRemoval: true,
     } as const;
   });

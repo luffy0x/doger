@@ -1,385 +1,195 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { InteractiveCapturePrompts, InteractiveCaptureSession } from "../src/core/lifecycle-service.ts";
+import { createConfig, parseConfig } from "../src/core/config.ts";
+import { DogerError } from "../src/core/errors.ts";
 import {
   initializeDoger,
   readStatus,
   reauthenticateDoger,
   uninstallLocalData,
+  type ConfigurationPrompts,
 } from "../src/core/lifecycle-service.ts";
-import { createConfig, parseConfig } from "../src/core/config.ts";
-import { DogerError } from "../src/core/errors.ts";
-import { createInitialState, parseRuntimeState, recordSuccess, withRevisions } from "../src/core/state.ts";
-import { parseRequestRecipe } from "../src/http/recipe.ts";
+import { createConfiguredState, parseRuntimeState, recordOutcome } from "../src/core/state.ts";
 import { readJsonFile, writeJsonAtomic } from "../src/infra/json-store.ts";
 import { hasInstallationMarker, writeInstallationMarker } from "../src/infra/installation.ts";
 import { resolveDogerPaths } from "../src/infra/paths.ts";
-import { EncryptedCredentialStore } from "../src/security/credential-store.ts";
-import type { KeyProvider } from "../src/security/key-provider.ts";
+import type { TokenStore } from "../src/security/token-store.ts";
 
-const SECRET_COOKIE = "synthetic-secret-cookie";
-const SECRET_CSRF = "synthetic-secret-csrf";
+const TOKEN_ONE = "session=synthetic-token-one";
+const TOKEN_TWO = "session=synthetic-token-two";
 
-class MemoryKeyProvider implements KeyProvider {
-  key: Uint8Array | null = null;
-
-  async get(): Promise<Uint8Array | null> {
-    return this.key;
-  }
-
-  async set(key: Uint8Array): Promise<void> {
-    this.key = key;
-  }
-
-  async delete(): Promise<void> {
-    this.key = null;
-  }
+class MemoryTokenStore implements TokenStore {
+  value: string | null = null;
+  async get(): Promise<string | null> { return this.value; }
+  async set(value: string): Promise<void> { this.value = value; }
+  async delete(): Promise<void> { this.value = null; }
 }
 
-function listPayload(requestId = "123.4"): unknown {
+function prompts(id = "1234567", token = TOKEN_ONE): ConfigurationPrompts {
   return {
-    success: true,
-    data: {
-      requests: [
-        {
-          requestId,
-          method: "POST",
-          url: "https://api.jd.com/activity/refresh?application=synthetic-application",
-          status: 200,
-        },
-      ],
-    },
-    error: null,
-  };
-}
-
-function detailPayload(requestId = "123.4"): unknown {
-  return {
-    success: true,
-    data: {
-      requestId,
-      method: "POST",
-      url: "https://api.jd.com/activity/refresh?application=synthetic-application",
-      status: 200,
-      headers: { "content-type": "application/json", "x-csrf-token": SECRET_CSRF },
-      postData: '{"target":"synthetic-target"}',
-      responseBody: '{"code":0,"message":"刷新成功"}',
-    },
-    error: null,
-  };
-}
-
-function cookiesPayload(): unknown {
-  return {
-    success: true,
-    data: {
-      cookies: [
-        { domain: ".jd.com", name: "session", path: "/", secure: true, value: SECRET_COOKIE },
-      ],
-    },
-    error: null,
-  };
-}
-
-class FakeSession implements InteractiveCaptureSession {
-  readonly actions: string[] = [];
-  list = listPayload();
-  detail = detailPayload();
-  cookies = cookiesPayload();
-
-  async open(): Promise<void> {
-    this.actions.push("open");
-  }
-
-  async clearNetworkRequests(): Promise<void> {
-    this.actions.push("clear");
-  }
-
-  async listNetworkRequests(): Promise<unknown> {
-    this.actions.push("list");
-    return this.list;
-  }
-
-  async getNetworkRequest(requestId: string): Promise<unknown> {
-    this.actions.push(`detail:${requestId}`);
-    return this.detail;
-  }
-
-  async getCookies(): Promise<unknown> {
-    this.actions.push("cookies");
-    return this.cookies;
-  }
-
-  async close(): Promise<void> {
-    this.actions.push("close");
-  }
-}
-
-function prompts(confirm: boolean, actions: string[]): InteractiveCapturePrompts {
-  return {
-    async waitForLogin() {
-      actions.push("login-ready");
-    },
-    async confirmRefresh() {
-      actions.push("confirm");
-      return confirm;
-    },
-    async waitForRefresh() {
-      actions.push("refresh-done");
-    },
+    async readDeliveryRecordId() { return id; },
+    async readToken() { return token; },
   };
 }
 
 async function fixture(context: test.TestContext) {
   const root = await mkdtemp(join(tmpdir(), "doger-lifecycle-"));
   context.after(() => rm(root, { recursive: true, force: true }));
-  return {
-    root,
-    paths: resolveDogerPaths({ env: { DOGER_DATA_DIR: root } }),
-    keyProvider: new MemoryKeyProvider(),
-  };
+  return { root, paths: resolveDogerPaths({ env: { DOGER_DATA_DIR: root } }), tokenStore: new MemoryTokenStore() };
 }
 
-test("initializes only after explicit confirmation and authoritative capture", async (context) => {
-  const { paths, keyProvider } = await fixture(context);
-  const browser = new FakeSession();
-  const promptActions: string[] = [];
-  const now = new Date("2026-08-28T01:02:03.000Z");
-
-  const report = await initializeDoger("https://campus.jd.com/application", {
-    paths,
-    keyProvider,
-    now: () => now,
-    browserFactory: () => browser,
-    prompts: prompts(true, promptActions),
-  });
-  const [config, recipe, state, credentials] = await Promise.all([
+test("init stores one target and token locally without creating a success anchor", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
+  const report = await initializeDoger({ paths, tokenStore, prompts: prompts() });
+  const [config, state] = await Promise.all([
     readJsonFile(paths.config, parseConfig),
-    readJsonFile(paths.recipe, parseRequestRecipe),
     readJsonFile(paths.runtimeState, parseRuntimeState),
-    new EncryptedCredentialStore(paths.credentials, keyProvider).load(),
   ]);
 
-  assert.equal(report.outcome, "SUCCESS");
-  assert.equal(report.firstSuccessAt, now.toISOString());
-  assert.equal(report.nextEligibleAt, "2026-08-28T09:02:03.000Z");
-  assert.deepEqual(config?.allowedHosts, ["campus.jd.com", "api.jd.com"]);
-  assert.equal(recipe?.endpoint, "https://api.jd.com/activity/refresh");
-  assert.equal(state?.recipeRevision, 1);
-  assert.equal(state?.credentialRevision, 1);
-  assert.equal(credentials?.cookieHeader, `session=${SECRET_COOKIE}`);
-  assert.deepEqual(promptActions, ["login-ready", "confirm", "refresh-done"]);
-  assert.deepEqual(browser.actions, ["open", "clear", "list", "detail:123.4", "cookies", "close"]);
-});
-
-test("declining the action closes the browser without persisting configuration", async (context) => {
-  const { paths, keyProvider } = await fixture(context);
-  const browser = new FakeSession();
-
-  const report = await initializeDoger("https://campus.jd.com/application", {
-    paths,
-    keyProvider,
-    browserFactory: () => browser,
-    prompts: prompts(false, []),
-  });
-
-  assert.equal(report.outcome, "CANCELLED");
-  assert.deepEqual(browser.actions, ["open", "clear", "close"]);
-  assert.equal(await readJsonFile(paths.config, parseConfig), null);
-  assert.equal(await readJsonFile(paths.runtimeState, parseRuntimeState), null);
-  assert.equal(keyProvider.key, null);
-});
-
-test("rejects initialization when any known local data already exists", async (context) => {
-  const cases = [
-    ["config", async (paths: ReturnType<typeof resolveDogerPaths>) => writeJsonAtomic(paths.config, {})],
-    ["runtime", async (paths: ReturnType<typeof resolveDogerPaths>) => writeJsonAtomic(paths.runtimeState, {})],
-    ["recipe", async (paths: ReturnType<typeof resolveDogerPaths>) => writeJsonAtomic(paths.recipe, {})],
-    ["credentials", async (paths: ReturnType<typeof resolveDogerPaths>) => writeFile(paths.credentials, "synthetic")],
-    ["marker", async (paths: ReturnType<typeof resolveDogerPaths>) => writeInstallationMarker(paths.installationMarker)],
-  ] as const;
-
-  for (const [name, prepare] of cases) {
-    await context.test(name, async (subcontext) => {
-      const { paths, keyProvider } = await fixture(subcontext);
-      await prepare(paths);
-      let browsers = 0;
-
-      await assert.rejects(
-        initializeDoger("https://campus.jd.com/other", {
-          paths,
-          keyProvider,
-          browserFactory: () => {
-            browsers += 1;
-            return new FakeSession();
-          },
-          prompts: prompts(true, []),
-        }),
-        (error: unknown) => error instanceof DogerError && error.code === "CONFIG_INVALID",
-      );
-      assert.equal(browsers, 0);
-    });
-  }
-});
-
-test("reauthentication preserves the first-success anchor and advances revisions", async (context) => {
-  const { paths, keyProvider } = await fixture(context);
-  const first = new Date("2026-08-28T00:00:00.000Z");
-  const reauthenticated = new Date("2026-08-28T08:30:00.000Z");
-  const config = { ...createConfig("https://campus.jd.com/application"), allowedHosts: ["campus.jd.com", "api.jd.com"] };
-  const state = withRevisions(recordSuccess(createInitialState(), first), {
-    recipeRevision: 1,
-    credentialRevision: 1,
-  });
-  await Promise.all([
-    writeInstallationMarker(paths.installationMarker),
-    writeJsonAtomic(paths.config, config),
-    writeJsonAtomic(paths.runtimeState, state),
-  ]);
-  const browser = new FakeSession();
-
-  const report = await reauthenticateDoger({
-    paths,
-    keyProvider,
-    now: () => reauthenticated,
-    browserFactory: () => browser,
-    prompts: prompts(true, []),
-  });
-  const nextState = await readJsonFile(paths.runtimeState, parseRuntimeState);
-
-  assert.equal(report.firstSuccessAt, first.toISOString());
-  assert.equal(report.nextEligibleAt, "2026-08-28T16:30:00.000Z");
-  assert.equal(nextState?.recipeRevision, 2);
-  assert.equal(nextState?.credentialRevision, 2);
-});
-
-test("capture failure closes the browser and stores no credentials", async (context) => {
-  const { paths, keyProvider } = await fixture(context);
-  const browser = new FakeSession();
-  browser.list = { success: true, data: { requests: [] }, error: null };
-
-  await assert.rejects(
-    initializeDoger("https://campus.jd.com/application", {
-      paths,
-      keyProvider,
-      browserFactory: () => browser,
-      prompts: prompts(true, []),
-    }),
-  );
-  assert.equal(browser.actions.at(-1), "close");
-  assert.equal(keyProvider.key, null);
-});
-
-test("status is redacted and uninstall removes only known local files", async (context) => {
-  const { root, paths, keyProvider } = await fixture(context);
-  const browser = new FakeSession();
-  await initializeDoger("https://campus.jd.com/application", {
-    paths,
-    keyProvider,
-    now: () => new Date("2026-08-28T01:02:03.000Z"),
-    browserFactory: () => browser,
-    prompts: prompts(true, []),
-  });
-  const unknownPath = join(root, "user-note.txt");
-  await writeFile(unknownPath, "preserve me", "utf8");
-
-  const status = await readStatus(paths);
-  const serialized = JSON.stringify(status);
-  assert.equal(status.initialized, true);
-  assert.equal(serialized.includes(SECRET_COOKIE), false);
-  assert.equal(serialized.includes(SECRET_CSRF), false);
-  assert.equal(serialized.includes("campus.jd.com"), false);
-
-  const uninstall = await uninstallLocalData(paths, keyProvider);
-  assert.equal(uninstall.outcome, "SUCCESS");
-  assert.equal(uninstall.removed.credentials, true);
-  assert.equal(uninstall.removed.keychainEntry, true);
-  assert.equal(uninstall.removed.installationMarker, true);
-  await assert.rejects(access(paths.installationMarker), { code: "ENOENT" });
-  assert.equal(await readFile(unknownPath, "utf8"), "preserve me");
-});
-
-test("uninstall is a no-op for an empty directory without a Doger marker", async (context) => {
-  const { paths, keyProvider } = await fixture(context);
-
-  const report = await uninstallLocalData(paths, keyProvider);
-
-  assert.equal(report.outcome, "SUCCESS");
-  assert.deepEqual(Object.values(report.removed), [false, false, false, false, false, false, false]);
-});
-
-test("uninstall cannot race an initialization before the marker is written", async (context) => {
-  const { paths, keyProvider } = await fixture(context);
-  let releaseLogin: (() => void) | undefined;
-  let signalLoginStarted: (() => void) | undefined;
-  const loginStarted = new Promise<void>((resolve) => {
-    signalLoginStarted = resolve;
-  });
-  const loginGate = new Promise<void>((resolve) => {
-    releaseLogin = resolve;
-  });
-
-  const initialization = initializeDoger("https://campus.jd.com/application", {
-    paths,
-    keyProvider,
-    browserFactory: () => new FakeSession(),
-    prompts: {
-      async waitForLogin() {
-        signalLoginStarted?.();
-        await loginGate;
-      },
-      async confirmRefresh() {
-        return false;
-      },
-      async waitForRefresh() {},
-    },
-  });
-  await loginStarted;
-
-  await assert.rejects(
-    uninstallLocalData(paths, keyProvider),
-    (error: unknown) => error instanceof DogerError && error.code === "ALREADY_RUNNING",
-  );
-  releaseLogin?.();
-  assert.equal((await initialization).outcome, "CANCELLED");
-});
-
-test("uninstall refuses known files in a directory without a Doger marker", async (context) => {
-  const { paths, keyProvider } = await fixture(context);
-  await writeJsonAtomic(paths.config, createConfig("https://campus.jd.com/application"));
-
-  await assert.rejects(
-    uninstallLocalData(paths, keyProvider),
-    (error: unknown) => error instanceof DogerError && error.code === "STORAGE_ERROR",
-  );
-  assert.notEqual(await readJsonFile(paths.config, parseConfig), null);
-});
-
-test("uninstall preserves its marker when removing another known path fails", async (context) => {
-  const { paths, keyProvider } = await fixture(context);
-  await Promise.all([
-    writeInstallationMarker(paths.installationMarker),
-    writeJsonAtomic(paths.config, createConfig("https://campus.jd.com/application")),
-    mkdir(paths.recipe),
-  ]);
-
-  await assert.rejects(
-    uninstallLocalData(paths, keyProvider),
-    (error: unknown) => error instanceof DogerError && error.code === "STORAGE_ERROR",
-  );
+  assert.deepEqual(report, { schemaVersion: 2, command: "init", outcome: "SUCCESS", scheduleAnchored: false });
+  assert.equal(config?.deliveryRecordId, 1_234_567);
+  assert.equal(state?.firstSuccessAt, null);
+  assert.equal(tokenStore.value, TOKEN_ONE);
   assert.equal(await hasInstallationMarker(paths.installationMarker), true);
+  assert.equal((await readFile(paths.config, "utf8")).includes(TOKEN_ONE), false);
 });
 
-test("status rejects corrupt public configuration", async (context) => {
-  const { paths } = await fixture(context);
-  await writeFile(paths.config, "{}", "utf8");
-
+test("init refuses any existing installation state before prompting or replacing a token", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
+  await writeJsonAtomic(paths.config, createConfig("1"));
+  let prompted = false;
   await assert.rejects(
-    readStatus(paths),
+    initializeDoger({
+      paths,
+      tokenStore,
+      prompts: {
+        async readDeliveryRecordId() { prompted = true; return "2"; },
+        async readToken() { prompted = true; return TOKEN_ONE; },
+      },
+    }),
     (error: unknown) => error instanceof DogerError && error.code === "CONFIG_INVALID",
   );
+  assert.equal(prompted, false);
+  assert.equal(tokenStore.value, null);
+});
+
+test("reauth replaces the token locally and clears only reauthentication state", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
+  await initializeDoger({ paths, tokenStore, prompts: prompts() });
+  const blocked = recordOutcome(createConfiguredState(), "REAUTH_REQUIRED", new Date("2026-08-28T00:00:00.000Z"));
+  await writeJsonAtomic(paths.runtimeState, blocked);
+
+  const report = await reauthenticateDoger({ paths, tokenStore, prompts: prompts("unused", TOKEN_TWO) });
+  const next = await readJsonFile(paths.runtimeState, parseRuntimeState);
+  assert.equal(report.outcome, "SUCCESS");
+  assert.equal(tokenStore.value, TOKEN_TWO);
+  assert.equal(next?.status, "ready");
+
+  await writeJsonAtomic(paths.runtimeState, recordOutcome(createConfiguredState(), "MANUAL_CHECK", new Date()));
+  await reauthenticateDoger({ paths, tokenStore, prompts: prompts("unused", TOKEN_ONE) });
+  assert.equal((await readJsonFile(paths.runtimeState, parseRuntimeState))?.status, "manual_check");
+});
+
+test("reauth can replace a malformed stored token", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
+  await Promise.all([
+    writeInstallationMarker(paths.installationMarker),
+    writeJsonAtomic(paths.config, createConfig("1")),
+    writeJsonAtomic(paths.runtimeState, createConfiguredState()),
+  ]);
+  tokenStore.value = "bad\r\ntoken";
+
+  await reauthenticateDoger({ paths, tokenStore, prompts: prompts("unused", TOKEN_TWO) });
+  assert.equal(tokenStore.value, TOKEN_TWO);
+});
+
+test("status omits both token and delivery-record ID", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
+  await initializeDoger({ paths, tokenStore, prompts: prompts() });
+  const serialized = JSON.stringify(await readStatus(paths));
+  assert.equal(serialized.includes(TOKEN_ONE), false);
+  assert.equal(serialized.includes("1234567"), false);
+});
+
+test("uninstall removes known v2 and legacy files but preserves unknown files", async (context) => {
+  const { root, paths, tokenStore } = await fixture(context);
+  await initializeDoger({ paths, tokenStore, prompts: prompts() });
+  await writeFile(join(root, "recipe.json"), "legacy", "utf8");
+  await writeFile(join(root, "credentials.enc"), "legacy", "utf8");
+  const unknown = join(root, "user-note.txt");
+  await writeFile(unknown, "preserve", "utf8");
+
+  const legacyKeyStore = new MemoryTokenStore();
+  legacyKeyStore.value = "synthetic-legacy-key";
+  const report = await uninstallLocalData(paths, tokenStore, legacyKeyStore);
+  assert.equal(report.outcome, "SUCCESS");
+  assert.equal(report.removed.token, true);
+  assert.equal(report.removed.legacyCredentialKey, true);
+  assert.equal(legacyKeyStore.value, null);
+  assert.equal(report.removed.legacyData, true);
+  assert.equal(await readFile(unknown, "utf8"), "preserve");
+  await assert.rejects(access(paths.installationMarker), { code: "ENOENT" });
+});
+
+test("schema-v1 data requires explicit uninstall and reinitialization", async (context) => {
+  const { paths } = await fixture(context);
+  await writeInstallationMarker(paths.installationMarker);
+  await writeJsonAtomic(paths.config, { schemaVersion: 1, applicationUrl: "https://campus.jd.com/" });
+  await writeJsonAtomic(paths.runtimeState, { schemaVersion: 1 });
+  await assert.rejects(
+    readStatus(paths),
+    (error: unknown) => error instanceof DogerError && error.code === "CONFIG_MIGRATION_REQUIRED",
+  );
+});
+
+test("confirmed uninstall recovers an orphaned native token without a marker", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
+  tokenStore.value = TOKEN_ONE;
+  const legacyKeyStore = new MemoryTokenStore();
+
+  const report = await uninstallLocalData(paths, tokenStore, legacyKeyStore);
+  assert.equal(report.removed.token, true);
+  assert.equal(tokenStore.value, null);
+
+  await initializeDoger({ paths, tokenStore, prompts: prompts() });
+  assert.equal(tokenStore.value, TOKEN_ONE);
+});
+
+test("confirmed uninstall recovers partial files and a token after interrupted initialization", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
+  await writeInstallationMarker(paths.installationMarker);
+  await writeJsonAtomic(paths.config, createConfig("1"));
+  tokenStore.value = TOKEN_ONE;
+
+  const report = await uninstallLocalData(paths, tokenStore, new MemoryTokenStore());
+  assert.equal(report.removed.config, true);
+  assert.equal(report.removed.token, true);
+  assert.equal(tokenStore.value, null);
+});
+
+test("uninstall without an ownership marker preserves same-named files", async (context) => {
+  const { root, paths, tokenStore } = await fixture(context);
+  const config = "unrelated-config";
+  const runtime = "unrelated-runtime";
+  const recipe = "unrelated-recipe";
+  await Promise.all([
+    writeFile(paths.config, config, "utf8"),
+    writeFile(paths.runtimeState, runtime, "utf8"),
+    writeFile(join(root, "recipe.json"), recipe, "utf8"),
+  ]);
+  tokenStore.value = TOKEN_ONE;
+
+  const report = await uninstallLocalData(paths, tokenStore, new MemoryTokenStore());
+
+  assert.equal(report.removed.config, false);
+  assert.equal(report.removed.runtimeState, false);
+  assert.equal(report.removed.legacyData, false);
+  assert.equal(await readFile(paths.config, "utf8"), config);
+  assert.equal(await readFile(paths.runtimeState, "utf8"), runtime);
+  assert.equal(await readFile(join(root, "recipe.json"), "utf8"), recipe);
+  assert.equal(tokenStore.value, null);
 });

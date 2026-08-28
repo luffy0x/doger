@@ -1,29 +1,26 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { classifyResponse } from "../src/http/classifier.ts";
-import { executeCurl, renderCurlConfig } from "../src/http/curl-executor.ts";
-import { parseRequestRecipe } from "../src/http/recipe.ts";
-import type { CredentialBundle } from "../src/security/credential-store.ts";
+import { CURL_ARGUMENTS, executeCurl, renderCurlConfig } from "../src/http/curl-executor.ts";
 
-const credentials: CredentialBundle = {
-  version: 1,
-  capturedAt: "2026-08-28T01:02:03.000Z",
-  cookieHeader: "session=synthetic-secret-cookie",
-  query: "signature=synthetic-secret-signature",
-  requestBody: "{\"target\":\"synthetic-secret-target\"}",
-  headers: {
-    "content-type": "application/json",
-    "x-csrf-token": "synthetic-secret-csrf",
-  },
-};
+const TOKEN = "session=synthetic-token-value";
 
-test("executes a captured request against a local mock without putting secrets in argv", async (context) => {
-  const requests: Array<{ url: string; cookie: string | undefined; csrf: string | undefined; body: string }> = [];
+async function listen(server: ReturnType<typeof createServer>): Promise<number> {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("Expected a TCP test server address.");
+  }
+  return address.port;
+}
+
+test("executes the fixed request through stdin and removes response files", async (context) => {
+  const requests: Array<Record<string, unknown>> = [];
   const server = createServer((request, response) => {
     let body = "";
     request.setEncoding("utf8");
@@ -32,329 +29,154 @@ test("executes a captured request against a local mock without putting secrets i
     });
     request.on("end", () => {
       requests.push({
-        url: request.url ?? "",
+        method: request.method,
+        url: request.url,
         cookie: request.headers.cookie,
-        csrf: request.headers["x-csrf-token"] as string | undefined,
+        contentType: request.headers["content-type"],
+        requestedWith: request.headers["x-requested-with"],
         body,
       });
       response.writeHead(200, { "content-type": "application/json" });
-      response.end('{"code":"synthetic_success"}');
+      response.end('{"success":true,"body":{"success":true,"noticeMsg":"private"}}');
     });
   });
-
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = await listen(server);
   context.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
-  const address = server.address();
-  assert.notEqual(address, null);
-  assert.equal(typeof address, "object");
-  if (address === null || typeof address === "string") {
-    throw new Error("Expected a TCP test server address.");
-  }
-
-  const recipe = parseRequestRecipe(
-    {
-      schemaVersion: 1,
-      endpoint: `http://127.0.0.1:${address.port}/activity/refresh`,
-      method: "POST",
-      allowedHosts: ["127.0.0.1"],
-      headerNames: ["content-type", "x-csrf-token"],
-      includeCookie: true,
-      includeQuery: true,
-      includeBody: true,
-      response: {
-        success: { statusCodes: [200], bodyIncludesAny: ["synthetic_success"] },
-        notDue: { statusCodes: [409], bodyIncludesAny: ["synthetic_not_due"] },
-        authBodyIncludesAny: ["synthetic_login_required"],
-        authLocationIncludesAny: ["/login"],
-        rateLimitBodyIncludesAny: ["synthetic_rate_limited"],
-      },
-    },
-    { allowHttpForLoopbackTests: true },
-  );
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "doger-curl-test-"));
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "doger-fixed-curl-"));
   context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
 
-  const response = await executeCurl(recipe, credentials, {
-    allowHttpForLoopbackTests: true,
+  const result = await executeCurl(1_234_567, TOKEN, {
+    endpoint: `http://127.0.0.1:${port}/api/wx/resume/refresh`,
+    allowLoopbackForTests: true,
     temporaryRoot,
     environment: { ...process.env, NO_PROXY: "127.0.0.1" },
   });
 
-  assert.equal(classifyResponse(response, recipe).outcome, "SUCCESS");
-  assert.deepEqual(requests, [
-    {
-      url: "/activity/refresh?signature=synthetic-secret-signature",
-      cookie: "session=synthetic-secret-cookie",
-      csrf: "synthetic-secret-csrf",
-      body: '{"target":"synthetic-secret-target"}',
-    },
-  ]);
+  assert.equal(classifyResponse(result).outcome, "SUCCESS");
+  assert.deepEqual(requests, [{
+    method: "POST",
+    url: "/api/wx/resume/refresh",
+    cookie: TOKEN,
+    contentType: "application/json",
+    requestedWith: "XMLHttpRequest",
+    body: '{"deliveryRecordId":1234567}',
+  }]);
+  assert.equal(CURL_ARGUMENTS.some((argument) => argument.includes(TOKEN)), false);
+  assert.deepEqual(await readdir(temporaryRoot), []);
 
-  const config = renderCurlConfig(recipe, credentials, "/private/body", "/private/headers");
-  assert.match(config, /synthetic-secret-cookie/);
-  assert.deepEqual(["--config", "-"].filter((argument) => argument.includes("synthetic-secret")), []);
+  const config = renderCurlConfig(1_234_567, TOKEN, "/private/body", "/private/headers");
+  assert.match(config, /header = "Cookie: session=synthetic-token-value"/);
 });
 
-test("ignores user curl configuration that could trace credentials", async (context) => {
+test("ignores ambient curl configuration that could trace the token", async (context) => {
   const server = createServer((_request, response) => {
-    response.writeHead(200).end("synthetic_success");
+    response.writeHead(200).end('{"success":true,"body":{"success":true}}');
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = await listen(server);
   context.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("Expected a TCP test server address.");
-  }
-
   const temporaryRoot = await mkdtemp(join(tmpdir(), "doger-curl-config-"));
   context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
   const tracePath = join(temporaryRoot, "curl-trace.log");
   await writeFile(join(temporaryRoot, ".curlrc"), `trace-ascii = "${tracePath}"\n`, "utf8");
-  const recipe = parseRequestRecipe(
-    {
-      schemaVersion: 1,
-      endpoint: `http://127.0.0.1:${address.port}/success`,
-      method: "GET",
-      allowedHosts: ["127.0.0.1"],
-      headerNames: [],
-      includeCookie: true,
-      includeQuery: false,
-      includeBody: false,
-      response: {
-        success: { statusCodes: [200], bodyIncludesAny: ["synthetic_success"] },
-        authBodyIncludesAny: [],
-        authLocationIncludesAny: [],
-        rateLimitBodyIncludesAny: [],
-      },
-    },
-    { allowHttpForLoopbackTests: true },
-  );
 
-  await executeCurl(recipe, credentials, {
-    allowHttpForLoopbackTests: true,
+  await executeCurl(1, TOKEN, {
+    endpoint: `http://127.0.0.1:${port}/api/wx/resume/refresh`,
+    allowLoopbackForTests: true,
     temporaryRoot,
     environment: { ...process.env, CURL_HOME: temporaryRoot, HOME: temporaryRoot, NO_PROXY: "127.0.0.1" },
   });
-
   await assert.rejects(access(tracePath), { code: "ENOENT" });
 });
 
-test("sends an at-prefixed request body literally instead of reading a local file", async (context) => {
-  let receivedBody = "";
-  const server = createServer((request, response) => {
-    request.setEncoding("utf8");
-    request.on("data", (chunk: string) => {
-      receivedBody += chunk;
-    });
-    request.on("end", () => {
-      response.writeHead(200).end("synthetic_success");
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  context.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("Expected a TCP test server address.");
-  }
-
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "doger-curl-body-"));
-  context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
-  const localPath = join(temporaryRoot, "local-secret.txt");
-  await writeFile(localPath, "synthetic-local-file-secret", "utf8");
-  const literalBody = `@${localPath}\nsecond-line\r\n`;
-  const recipe = parseRequestRecipe(
-    {
-      schemaVersion: 1,
-      endpoint: `http://127.0.0.1:${address.port}/success`,
-      method: "POST",
-      allowedHosts: ["127.0.0.1"],
-      headerNames: [],
-      includeCookie: false,
-      includeQuery: false,
-      includeBody: true,
-      response: {
-        success: { statusCodes: [200], bodyIncludesAny: ["synthetic_success"] },
-        authBodyIncludesAny: [],
-        authLocationIncludesAny: [],
-        rateLimitBodyIncludesAny: [],
-      },
-    },
-    { allowHttpForLoopbackTests: true },
-  );
-
-  await executeCurl(
-    recipe,
-    { version: 1, capturedAt: credentials.capturedAt, headers: {}, requestBody: literalBody },
-    {
-      allowHttpForLoopbackTests: true,
-      temporaryRoot,
-      environment: { ...process.env, NO_PROXY: "127.0.0.1" },
-    },
-  );
-
-  assert.equal(receivedBody, literalBody);
-  assert.equal(receivedBody.includes("synthetic-local-file-secret"), false);
-});
-
-test("rejects oversized response headers", async (context) => {
+test("does not follow redirects", async (context) => {
+  let requests = 0;
   const server = createServer((_request, response) => {
-    for (let index = 0; index < 40; index += 1) {
-      response.setHeader(`x-synthetic-${index}`, "x".repeat(4_096));
-    }
-    response.writeHead(200).end("synthetic_success");
+    requests += 1;
+    response.writeHead(302, { location: "/unexpected" }).end();
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = await listen(server);
   context.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("Expected a TCP test server address.");
-  }
 
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "doger-curl-headers-"));
-  context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
-  const recipe = parseRequestRecipe(
-    {
-      schemaVersion: 1,
-      endpoint: `http://127.0.0.1:${address.port}/success`,
-      method: "GET",
-      allowedHosts: ["127.0.0.1"],
-      headerNames: [],
-      includeCookie: false,
-      includeQuery: false,
-      includeBody: false,
-      response: {
-        success: { statusCodes: [200], bodyIncludesAny: ["synthetic_success"] },
-        authBodyIncludesAny: [],
-        authLocationIncludesAny: [],
-        rateLimitBodyIncludesAny: [],
-      },
-    },
-    { allowHttpForLoopbackTests: true },
-  );
-
-  const result = await executeCurl(
-    recipe,
-    { version: 1, capturedAt: credentials.capturedAt, headers: {} },
-    {
-      allowHttpForLoopbackTests: true,
-      temporaryRoot,
-      environment: { ...process.env, NO_PROXY: "127.0.0.1" },
-    },
-  );
-
-  assert.equal(classifyResponse(result, recipe).outcome, "MANUAL_CHECK");
-  assert.equal(result.body, "");
-  assert.deepEqual(result.headers, {});
+  const result = await executeCurl(1, TOKEN, {
+    endpoint: `http://127.0.0.1:${port}/api/wx/resume/refresh`,
+    allowLoopbackForTests: true,
+    environment: { ...process.env, NO_PROXY: "127.0.0.1" },
+  });
+  assert.equal(result.statusCode, 302);
+  assert.equal(classifyResponse(result).outcome, "MANUAL_CHECK");
+  assert.equal(requests, 1);
 });
 
-test("classifies a real curl timeout as ambiguous", async (context) => {
-  const server = createServer(() => undefined);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  context.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("Expected a TCP test server address.");
-  }
-
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "doger-curl-timeout-"));
-  context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
-  const recipe = parseRequestRecipe(
-    {
-      schemaVersion: 1,
-      endpoint: `http://127.0.0.1:${address.port}/timeout`,
-      method: "GET",
-      allowedHosts: ["127.0.0.1"],
-      headerNames: [],
-      includeCookie: false,
-      includeQuery: false,
-      includeBody: false,
-      response: {
-        success: { statusCodes: [200], bodyIncludesAny: ["synthetic_success"] },
-        authBodyIncludesAny: [],
-        authLocationIncludesAny: [],
-        rateLimitBodyIncludesAny: [],
-      },
-    },
-    { allowHttpForLoopbackTests: true },
-  );
-
-  const result = await executeCurl(recipe, { version: 1, capturedAt: credentials.capturedAt, headers: {} }, {
-    allowHttpForLoopbackTests: true,
-    temporaryRoot,
+test("classifies a real timeout and an oversized response conservatively", async (context) => {
+  const timeoutServer = createServer(() => undefined);
+  const timeoutPort = await listen(timeoutServer);
+  context.after(() => new Promise<void>((resolve, reject) => timeoutServer.close((error) => (error ? reject(error) : resolve()))));
+  const timedOut = await executeCurl(1, TOKEN, {
+    endpoint: `http://127.0.0.1:${timeoutPort}/api/wx/resume/refresh`,
+    allowLoopbackForTests: true,
     maxTimeSeconds: 0.05,
     environment: { ...process.env, NO_PROXY: "127.0.0.1" },
   });
+  assert.equal(timedOut.exitCode, 28);
+  assert.equal(classifyResponse(timedOut).outcome, "MANUAL_CHECK");
 
-  assert.equal(result.exitCode, 28);
-  assert.equal(classifyResponse(result, recipe).outcome, "MANUAL_CHECK");
+  const largeServer = createServer((_request, response) => {
+    response.writeHead(200).end("x".repeat(1_048_577));
+  });
+  const largePort = await listen(largeServer);
+  context.after(() => new Promise<void>((resolve, reject) => largeServer.close((error) => (error ? reject(error) : resolve()))));
+  const oversized = await executeCurl(1, TOKEN, {
+    endpoint: `http://127.0.0.1:${largePort}/api/wx/resume/refresh`,
+    allowLoopbackForTests: true,
+    environment: { ...process.env, NO_PROXY: "127.0.0.1" },
+  });
+  assert.equal(oversized.responseTooLarge, true);
+  assert.equal(oversized.body, "");
 });
 
-test("classifies all HTTP outcomes through the real curl boundary", async (context) => {
+test("classifies fixed-contract HTTP failures through the real curl boundary", async (context) => {
   const server = createServer((request, response) => {
-    const path = request.url?.split("?", 1)[0];
-    if (path === "/success") {
-      response.writeHead(200).end("synthetic_success");
-    } else if (path === "/not-due") {
-      response.writeHead(409).end("synthetic_not_due");
-    } else if (path === "/reauth") {
-      response.writeHead(401).end("unauthorized");
-    } else if (path === "/login") {
-      response.writeHead(302, { location: "/login-form" }).end();
-    } else if (path === "/rate") {
-      response.writeHead(429, { "retry-after": "120" }).end("rate limited");
-    } else if (path === "/transient") {
-      response.writeHead(503).end("unavailable");
-    } else {
-      response.writeHead(200).end("unknown");
-    }
+    const path = request.url ?? "";
+    if (path.endsWith("/reauth")) response.writeHead(401).end("private");
+    else if (path.endsWith("/forbidden")) response.writeHead(403).end("private");
+    else if (path.endsWith("/rate")) response.writeHead(429, { "retry-after": "120" }).end("private");
+    else if (path.endsWith("/server")) response.writeHead(503).end("private");
+    else if (path.endsWith("/false")) response.writeHead(200).end('{"success":true,"body":{"success":false}}');
+    else response.writeHead(200).end("not-json");
   });
-
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = await listen(server);
   context.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("Expected a TCP test server address.");
-  }
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "doger-curl-outcomes-"));
-  context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
-
   const expected = new Map([
-    ["success", "SUCCESS"],
-    ["not-due", "NOT_DUE"],
     ["reauth", "REAUTH_REQUIRED"],
-    ["login", "REAUTH_REQUIRED"],
+    ["forbidden", "REAUTH_REQUIRED"],
     ["rate", "RATE_LIMITED"],
-    ["transient", "TRANSIENT_FAILURE"],
-    ["unknown", "MANUAL_CHECK"],
+    ["server", "TRANSIENT_FAILURE"],
+    ["false", "MANUAL_CHECK"],
+    ["malformed", "MANUAL_CHECK"],
   ] as const);
-
   for (const [path, outcome] of expected) {
-    const recipe = parseRequestRecipe(
-      {
-        schemaVersion: 1,
-        endpoint: `http://127.0.0.1:${address.port}/${path}`,
-        method: "GET",
-        allowedHosts: ["127.0.0.1"],
-        headerNames: [],
-        includeCookie: false,
-        includeQuery: false,
-        includeBody: false,
-        response: {
-          success: { statusCodes: [200], bodyIncludesAny: ["synthetic_success"] },
-          notDue: { statusCodes: [409], bodyIncludesAny: ["synthetic_not_due"] },
-          authBodyIncludesAny: ["synthetic_login_required"],
-          authLocationIncludesAny: ["/login-form"],
-          rateLimitBodyIncludesAny: ["synthetic_rate_limited"],
-        },
-      },
-      { allowHttpForLoopbackTests: true },
-    );
-    const result = await executeCurl(recipe, { version: 1, capturedAt: credentials.capturedAt, headers: {} }, {
-      allowHttpForLoopbackTests: true,
-      temporaryRoot,
+    const result = await executeCurl(1, TOKEN, {
+      endpoint: `http://127.0.0.1:${port}/${path}`,
+      allowLoopbackForTests: true,
       environment: { ...process.env, NO_PROXY: "127.0.0.1" },
     });
-
-    assert.equal(classifyResponse(result, recipe).outcome, outcome, path);
+    assert.equal(classifyResponse(result).outcome, outcome, path);
   }
+});
+
+test("classifies a real connection failure as transient", async () => {
+  const server = createServer();
+  const port = await listen(server);
+  await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  const result = await executeCurl(1, TOKEN, {
+    endpoint: `http://127.0.0.1:${port}/closed`,
+    allowLoopbackForTests: true,
+    environment: { ...process.env, NO_PROXY: "127.0.0.1" },
+  });
+  assert.equal(result.exitCode, 7);
+  assert.equal(classifyResponse(result).outcome, "TRANSIENT_FAILURE");
+});
+
+test("rejects token control characters before starting curl", async () => {
+  await assert.rejects(executeCurl(1, "session=value\r\ninjected: yes"));
 });

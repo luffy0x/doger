@@ -4,183 +4,147 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createConfig } from "../src/core/config.ts";
+import { createConfig, REFRESH_INTERVAL_MS } from "../src/core/config.ts";
 import { runGuardedRefresh } from "../src/core/refresh-service.ts";
-import { createInitialState, parseRuntimeState, recordSuccess } from "../src/core/state.ts";
+import { createConfiguredState, parseRuntimeState, recordOutcome, recordSuccess } from "../src/core/state.ts";
 import type { CurlResponse } from "../src/http/classifier.ts";
-import { parseRequestRecipe } from "../src/http/recipe.ts";
 import { readJsonFile, writeJsonAtomic } from "../src/infra/json-store.ts";
 import { writeInstallationMarker } from "../src/infra/installation.ts";
 import { resolveDogerPaths } from "../src/infra/paths.ts";
-import { EncryptedCredentialStore } from "../src/security/credential-store.ts";
-import type { KeyProvider } from "../src/security/key-provider.ts";
+import type { TokenStore } from "../src/security/token-store.ts";
 
-class MemoryKeyProvider implements KeyProvider {
-  key: Uint8Array | null = null;
-
-  async get(): Promise<Uint8Array | null> {
-    return this.key;
-  }
-
-  async set(key: Uint8Array): Promise<void> {
-    this.key = key;
-  }
-
-  async delete(): Promise<void> {
-    this.key = null;
-  }
-}
-
-const recipe = parseRequestRecipe({
-  schemaVersion: 1,
-  endpoint: "https://api.jd.com/activity/refresh",
-  method: "POST",
-  allowedHosts: ["api.jd.com"],
-  headerNames: [],
-  includeCookie: false,
-  includeQuery: false,
-  includeBody: false,
-  response: {
-    success: { statusCodes: [200], bodyIncludesAny: ["synthetic_success"] },
-    authBodyIncludesAny: [],
-    authLocationIncludesAny: [],
-    rateLimitBodyIncludesAny: [],
-  },
-});
-
-async function fixture(context: test.TestContext, now: Date) {
-  const root = await mkdtemp(join(tmpdir(), "doger-refresh-service-"));
-  context.after(() => rm(root, { recursive: true, force: true }));
-  const paths = resolveDogerPaths({ env: { DOGER_DATA_DIR: root } });
-  const keyProvider = new MemoryKeyProvider();
-  const config = { ...createConfig("https://campus.jd.com/application"), allowedHosts: ["campus.jd.com", "api.jd.com"] };
-  const state = recordSuccess(createInitialState(), now);
-
-  await Promise.all([
-    writeInstallationMarker(paths.installationMarker),
-    writeJsonAtomic(paths.config, config),
-    writeJsonAtomic(paths.recipe, recipe),
-    writeJsonAtomic(paths.runtimeState, state),
-  ]);
-  await new EncryptedCredentialStore(paths.credentials, keyProvider).save({
-    version: 1,
-    capturedAt: now.toISOString(),
-    headers: {},
-  });
-  return { paths, keyProvider, state };
+class MemoryTokenStore implements TokenStore {
+  value: string | null = "session=synthetic-token";
+  reads = 0;
+  async get(): Promise<string | null> { this.reads += 1; return this.value; }
+  async set(value: string): Promise<void> { this.value = value; }
+  async delete(): Promise<void> { this.value = null; }
 }
 
 function response(overrides: Partial<CurlResponse> = {}): CurlResponse {
-  return { exitCode: 0, statusCode: 200, headers: {}, body: "synthetic_success", ...overrides };
+  return {
+    exitCode: 0,
+    statusCode: 200,
+    headers: {},
+    body: '{"success":true,"body":{"success":true}}',
+    responseTooLarge: false,
+    ...overrides,
+  };
 }
 
-test("returns NOT_DUE without loading credentials or making a request", async (context) => {
-  const first = new Date("2026-08-28T00:00:00.000Z");
-  const { paths, keyProvider } = await fixture(context, first);
-  keyProvider.key = null;
-  let requests = 0;
+async function fixture(context: test.TestContext, state = createConfiguredState()) {
+  const root = await mkdtemp(join(tmpdir(), "doger-refresh-service-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const paths = resolveDogerPaths({ env: { DOGER_DATA_DIR: root } });
+  await Promise.all([
+    writeInstallationMarker(paths.installationMarker),
+    writeJsonAtomic(paths.config, createConfig("1234567")),
+    writeJsonAtomic(paths.runtimeState, state),
+  ]);
+  return { paths, state, tokenStore: new MemoryTokenStore() };
+}
 
-  const result = await runGuardedRefresh({
-    paths,
-    keyProvider,
-    now: () => new Date("2026-08-28T07:59:59.999Z"),
-    refreshClient: {
-      execute: async () => {
-        requests += 1;
-        return response();
-      },
-    },
-  });
-
-  assert.equal(result.outcome, "NOT_DUE");
-  assert.equal(result.attempted, false);
-  assert.equal(requests, 0);
-});
-
-test("persists success and advances eligibility from completion time", async (context) => {
-  const first = new Date("2026-08-28T00:00:00.000Z");
+test("the first explicit refresh is immediately due and anchors the schedule", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
   const completed = new Date("2026-08-28T08:00:00.000Z");
-  const { paths, keyProvider } = await fixture(context, first);
-
-  const result = await runGuardedRefresh({
+  let calls = 0;
+  const report = await runGuardedRefresh({
     paths,
-    keyProvider,
+    tokenStore,
     now: () => completed,
-    refreshClient: { execute: async () => response() },
+    refreshClient: { execute: async () => { calls += 1; return response(); } },
   });
   const state = await readJsonFile(paths.runtimeState, parseRuntimeState);
 
-  assert.equal(result.outcome, "SUCCESS");
-  assert.equal(result.attempted, true);
-  assert.equal(result.nextEligibleAt, "2026-08-28T16:00:00.000Z");
-  assert.equal(state?.firstSuccessAt, first.toISOString());
-  assert.equal(state?.lastSuccessAt, completed.toISOString());
+  assert.equal(report.outcome, "SUCCESS");
+  assert.equal(calls, 1);
+  assert.equal(state?.firstSuccessAt, completed.toISOString());
+  assert.equal(state?.nextEligibleAt, new Date(completed.getTime() + REFRESH_INTERVAL_MS).toISOString());
 });
 
-test("persists reauthentication state without exposing the response", async (context) => {
+test("NOT_DUE and blocked states do not read the token or start curl", async (context) => {
   const first = new Date("2026-08-28T00:00:00.000Z");
-  const now = new Date("2026-08-28T08:00:00.000Z");
-  const { paths, keyProvider } = await fixture(context, first);
+  for (const state of [
+    recordSuccess(createConfiguredState(), first),
+    recordOutcome(createConfiguredState(), "MANUAL_CHECK", first),
+  ]) {
+    const { paths, tokenStore } = await fixture(context, state);
+    let calls = 0;
+    const report = await runGuardedRefresh({
+      paths,
+      tokenStore,
+      now: () => new Date("2026-08-28T01:00:00.000Z"),
+      refreshClient: { execute: async () => { calls += 1; return response(); } },
+    });
+    assert.equal(report.attempted, false);
+    assert.equal(tokenStore.reads, 0);
+    assert.equal(calls, 0);
+  }
+});
 
-  const result = await runGuardedRefresh({
+test("a missing token persists REAUTH_REQUIRED without starting curl", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
+  tokenStore.value = null;
+  let calls = 0;
+  const report = await runGuardedRefresh({
     paths,
-    keyProvider,
-    now: () => now,
-    refreshClient: { execute: async () => response({ statusCode: 401, body: "synthetic-secret-response" }) },
+    tokenStore,
+    refreshClient: { execute: async () => { calls += 1; return response(); } },
   });
   const state = await readJsonFile(paths.runtimeState, parseRuntimeState);
-
-  assert.equal(result.outcome, "REAUTH_REQUIRED");
+  assert.equal(report.outcome, "REAUTH_REQUIRED");
+  assert.equal(report.attempted, false);
   assert.equal(state?.status, "reauth_required");
-  assert.equal(JSON.stringify(result).includes("synthetic-secret-response"), false);
+  assert.equal(calls, 0);
 });
 
-test("honors Retry-After without retrying rate limits", async (context) => {
-  const first = new Date("2026-08-28T00:00:00.000Z");
-  const now = new Date("2026-08-28T08:00:00.000Z");
-  const { paths, keyProvider } = await fixture(context, first);
-  let requests = 0;
-
-  const result = await runGuardedRefresh({
+test("a malformed stored token becomes REAUTH_REQUIRED and can be replaced", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
+  tokenStore.value = "bad\r\ntoken";
+  let calls = 0;
+  const report = await runGuardedRefresh({
     paths,
-    keyProvider,
-    now: () => now,
-    refreshClient: {
-      execute: async () => {
-        requests += 1;
-        return response({ statusCode: 429, headers: { "retry-after": ["120"] }, body: "synthetic-rate" });
-      },
-    },
+    tokenStore,
+    refreshClient: { execute: async () => { calls += 1; return response(); } },
   });
-
-  assert.equal(result.outcome, "RATE_LIMITED");
-  assert.equal(result.retryAfterAt, "2026-08-28T08:02:00.000Z");
-  assert.equal(result.nextEligibleAt, "2026-08-28T08:02:00.000Z");
-  assert.equal(requests, 1);
+  assert.equal(report.outcome, "REAUTH_REQUIRED");
+  assert.equal((await readJsonFile(paths.runtimeState, parseRuntimeState))?.status, "reauth_required");
+  assert.equal(calls, 0);
 });
 
-test("returns MANUAL_CHECK when the recipe host is not approved by configuration", async (context) => {
-  const first = new Date("2026-08-28T00:00:00.000Z");
+test("persists redacted authentication and rate-limit results with one attempt", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
   const now = new Date("2026-08-28T08:00:00.000Z");
-  const { paths, keyProvider } = await fixture(context, first);
-  await writeJsonAtomic(paths.config, createConfig("https://campus.jd.com/application"));
-  let requests = 0;
-
-  const result = await runGuardedRefresh({
+  const report = await runGuardedRefresh({
     paths,
-    keyProvider,
+    tokenStore,
     now: () => now,
     refreshClient: {
-      execute: async () => {
-        requests += 1;
-        return response();
-      },
+      execute: async () => response({ statusCode: 429, headers: { "retry-after": ["120"] }, body: "private" }),
     },
   });
-  const state = await readJsonFile(paths.runtimeState, parseRuntimeState);
+  assert.equal(report.outcome, "RATE_LIMITED");
+  assert.equal(report.attempts, 1);
+  assert.equal(report.retryAfterAt, "2026-08-28T08:02:00.000Z");
+  assert.equal(JSON.stringify(report).includes("private"), false);
+});
 
-  assert.equal(result.outcome, "MANUAL_CHECK");
-  assert.equal(result.reason, "host_not_approved");
-  assert.equal(state?.status, "manual_check");
-  assert.equal(requests, 0);
+test("rejects a non-JD endpoint before reading the token", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
+  await assert.rejects(runGuardedRefresh({
+    paths,
+    tokenStore,
+    refreshClient: { curl: { endpoint: "https://example.com/refresh" } },
+  }));
+  assert.equal(tokenStore.reads, 0);
+});
+
+test("reports schema-v1 migration deterministically before parsing legacy state", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
+  await writeJsonAtomic(paths.config, { schemaVersion: 1, applicationUrl: "https://campus.jd.com/" });
+  await writeJsonAtomic(paths.runtimeState, { schemaVersion: 1 });
+  await assert.rejects(
+    runGuardedRefresh({ paths, tokenStore }),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "CONFIG_MIGRATION_REQUIRED",
+  );
 });
