@@ -18,6 +18,11 @@ test("rejects credentials embedded in the application URL", () => {
   );
 });
 
+test("rejects non-JD and lookalike application hosts", () => {
+  assert.throws(() => createConfig("https://example.com/application/123"));
+  assert.throws(() => createConfig("https://jd.com.example.net/application/123"));
+});
+
 test("rejects intervals shorter or longer than eight hours", () => {
   const config = createConfig("https://campus.jd.com/application/123");
 

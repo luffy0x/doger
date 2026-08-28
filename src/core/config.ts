@@ -31,6 +31,11 @@ function parseHttpsUrl(rawUrl: string): URL {
     throw new DogerError("CONFIG_INVALID", "Application URL must not contain credentials.");
   }
 
+  const hostname = url.hostname.toLowerCase();
+  if (hostname !== "jd.com" && !hostname.endsWith(".jd.com")) {
+    throw new DogerError("CONFIG_INVALID", "Application URL must use an official JD domain.");
+  }
+
   return url;
 }
 
