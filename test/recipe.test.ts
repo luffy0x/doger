@@ -66,3 +66,13 @@ test("accepts structured JSON evidence and rejects invalid predicate paths", () 
 test("rejects unsafe captured headers", () => {
   assert.throws(() => parseRequestRecipe({ ...validRecipe, headerNames: ["content-length"] }));
 });
+
+test("rejects non-JD request hosts outside the explicit loopback test mode", () => {
+  assert.throws(() =>
+    parseRequestRecipe({
+      ...validRecipe,
+      endpoint: "https://example.com/activity/refresh",
+      allowedHosts: ["example.com"],
+    }),
+  );
+});

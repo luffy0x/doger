@@ -1,4 +1,5 @@
 import { DogerError } from "../core/errors.ts";
+import { isOfficialJdHost } from "../core/config.ts";
 
 export const RECIPE_SCHEMA_VERSION = 1 as const;
 export type HttpMethod = "GET" | "POST";
@@ -116,10 +117,14 @@ function parsePredicate(value: unknown, field: string, requireBodyEvidence: bool
   };
 }
 
-function parseHost(value: string): string {
+function parseHost(value: string, options: RecipeParseOptions): string {
   const normalized = value.trim().toLowerCase();
   if (normalized === "" || normalized.includes("://") || normalized.includes("/") || normalized.includes("@")) {
     throw new DogerError("RECIPE_INVALID", "Allowed hosts must contain hostnames only.");
+  }
+  const isLoopback = normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
+  if (!isOfficialJdHost(normalized) && !(options.allowHttpForLoopbackTests === true && isLoopback)) {
+    throw new DogerError("RECIPE_INVALID", "Request hosts must belong to the official JD domain.");
   }
   return normalized;
 }
@@ -160,7 +165,9 @@ export function parseRequestRecipe(value: unknown, options: RecipeParseOptions =
     throw new DogerError("RECIPE_INVALID", "Request method must be GET or POST.");
   }
 
-  const allowedHosts = [...new Set(parseStringArray(value.allowedHosts, "allowedHosts").map(parseHost))];
+  const allowedHosts = [
+    ...new Set(parseStringArray(value.allowedHosts, "allowedHosts").map((host) => parseHost(host, options))),
+  ];
   if (!allowedHosts.includes(endpoint.hostname.toLowerCase())) {
     throw new DogerError("RECIPE_INVALID", "Request endpoint host is not allowlisted.");
   }

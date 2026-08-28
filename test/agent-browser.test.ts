@@ -53,7 +53,7 @@ test("uses a fresh allowlisted headed session without restore or state replay", 
   assert.equal(open.environment.AGENT_BROWSER_STATE, undefined);
   assert.equal(open.environment.AGENT_BROWSER_PROFILE, undefined);
   assert.equal(open.environment.PATH, "/usr/bin");
-  assert.deepEqual(commands[1]?.args.slice(-1), ["close"]);
+  assert.deepEqual(commands[1]?.args.slice(-2), ["close", "--all"]);
   assert.ok(commands[1]?.args.includes("--headed"));
 });
 

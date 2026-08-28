@@ -216,7 +216,7 @@ export class AgentBrowserSession {
     }
     this.#closed = true;
     if (this.#opened) {
-      await this.#execute(["close"]);
+      await this.#execute(["close", "--all"]);
     }
   }
 

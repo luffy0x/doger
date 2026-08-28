@@ -40,3 +40,8 @@ test("requires the application host in the allowlist", () => {
     (error: unknown) => error instanceof DogerError && error.code === "CONFIG_INVALID",
   );
 });
+
+test("rejects non-JD hosts added to the configuration allowlist", () => {
+  const config = createConfig("https://campus.jd.com/application/123");
+  assert.throws(() => parseConfig({ ...config, allowedHosts: ["campus.jd.com", "example.com"] }));
+});

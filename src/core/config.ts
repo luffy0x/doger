@@ -3,6 +3,11 @@ import { DogerError } from "./errors.ts";
 export const CONFIG_SCHEMA_VERSION = 1 as const;
 export const REFRESH_INTERVAL_MS = 8 * 60 * 60 * 1_000;
 
+export function isOfficialJdHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === "jd.com" || normalized.endsWith(".jd.com");
+}
+
 export interface DogerConfig {
   readonly schemaVersion: typeof CONFIG_SCHEMA_VERSION;
   readonly applicationUrl: string;
@@ -31,8 +36,7 @@ function parseHttpsUrl(rawUrl: string): URL {
     throw new DogerError("CONFIG_INVALID", "Application URL must not contain credentials.");
   }
 
-  const hostname = url.hostname.toLowerCase();
-  if (hostname !== "jd.com" && !hostname.endsWith(".jd.com")) {
+  if (!isOfficialJdHost(url.hostname)) {
     throw new DogerError("CONFIG_INVALID", "Application URL must use an official JD domain.");
   }
 
@@ -52,6 +56,9 @@ function normalizeAllowedHosts(value: unknown): readonly string[] {
     const normalized = host.trim().toLowerCase();
     if (normalized.includes("://") || normalized.includes("/") || normalized.includes("@")) {
       throw new DogerError("CONFIG_INVALID", "Allowed hosts must contain hostnames only.");
+    }
+    if (!isOfficialJdHost(normalized)) {
+      throw new DogerError("CONFIG_INVALID", "Allowed hosts must belong to the official JD domain.");
     }
 
     return normalized;
