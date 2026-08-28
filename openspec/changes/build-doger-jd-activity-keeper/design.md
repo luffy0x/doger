@@ -99,10 +99,10 @@ Runtime commands:
 
 During `init`, agent-browser records the network activity surrounding one user-confirmed press of the refresh control. The capture layer selects the relevant fetch/XHR request, then separates it into:
 
-- public recipe data: method, approved host, path, non-sensitive header names, body shape, and response classifier
-- secret material: cookies, authorization values, CSRF values, signed parameters, and identifiers classified as sensitive
+- public recipe data: method, approved host, path, non-sensitive header names, credential-presence flags, and response classifier
+- secret material: cookies, authorization values, CSRF values, query data, request bodies, and identifiers classified as sensitive
 
-Raw HAR data is processed in a restricted temporary location and removed after normalization. It is never included in fixtures or returned to Codex.
+Agent-browser returns bounded structured capture data directly to the process. Doger normalizes it in memory and never creates or persists a raw HAR file. Raw capture data is never included in fixtures or returned to Codex.
 
 If the request includes a per-request signature, browser-bound proof, or a JavaScript challenge that cannot be reproduced without bypassing controls, the curl path is marked unsupported. The task SHALL stop with `MANUAL_CHECK`; it SHALL NOT implement signature forgery or stealth behavior.
 
@@ -110,7 +110,7 @@ If the request includes a per-request signature, browser-bound proof, or a JavaS
 
 The credential payload is encrypted with AES-256-GCM. The data-encryption key is stored through the operating-system credential store using `@napi-rs/keyring`. Encrypted payloads and non-sensitive runtime state are stored under the user's local application-data directory with owner-only permissions.
 
-The curl executor writes sensitive curl configuration to the child process over stdin. Secret values SHALL NOT appear in argv, environment diagnostics, stdout, stderr, error objects, telemetry, or persisted logs.
+The curl executor writes sensitive curl configuration to the child process over stdin and disables ambient user curl configuration files. Secret values SHALL NOT appear in argv, environment diagnostics, stdout, stderr, error objects, telemetry, or persisted logs.
 
 Each `init` or `reauth` starts a new named agent-browser session with an explicit JD domain allowlist. The session is closed after capture and is never restored or replayed. This is intentional: agent-browser cannot enforce its network allowlist when restore/state replay is enabled. Reauthentication therefore requires the user to complete login again, while the reusable request credentials remain protected by Doger's encrypted credential store.
 
@@ -187,7 +187,7 @@ User            Codex/$doger       doger CLI       agent-browser
 
 - Repository: source, tests, the `doger` skill, documentation, and non-secret mock fixtures
 - Repository branding: `assets/doger-logo.svg`, reused by README and optional skill metadata without remote image dependencies
-- User application-data directory: encrypted credential payload, encrypted agent-browser state, runtime state, and normalized request recipe
+- User application-data directory: encrypted credential payload, installation marker, runtime state, and normalized request recipe
 - Operating-system keychain: encryption key only
 - Codex: scheduled-task definition and redacted run results only
 

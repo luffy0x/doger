@@ -14,6 +14,8 @@ Report a vulnerability through GitHub's private security advisory flow for this 
 
 Doger is designed to keep authentication material outside model context, process arguments, logs, fixtures, and Git. Credentials are encrypted locally, and the encryption key is stored in the operating-system credential store.
 
+Routine refreshes pass sensitive curl configuration through stdin and disable ambient user curl configuration files. This prevents options from `.curlrc` from tracing credentials or changing the guarded request.
+
 Interactive authentication uses a fresh allowlisted agent-browser session. Browser restore, profile reuse, state replay, auto-connect, and CDP attachment are deliberately disabled because they are incompatible with agent-browser's domain-containment guarantee. The browser session is closed after capture and is not persisted.
 
 The repository `$doger` Skill and Scheduled Task must consume only the CLI's redacted JSON. They must not inspect local configuration, request recipe, encrypted credential, browser, Keychain, or raw response data.
