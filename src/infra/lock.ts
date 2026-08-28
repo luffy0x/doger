@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, stat, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 
@@ -31,12 +31,30 @@ function defaultIsProcessAlive(pid: number): boolean {
 async function readLock(path: string): Promise<LockRecord | null> {
   try {
     const value = JSON.parse(await readFile(path, "utf8")) as Partial<LockRecord>;
-    if (typeof value.pid !== "number" || typeof value.acquiredAt !== "string" || typeof value.token !== "string") {
+    if (
+      !Number.isSafeInteger(value.pid) ||
+      (value.pid as number) <= 0 ||
+      typeof value.acquiredAt !== "string" ||
+      !Number.isFinite(Date.parse(value.acquiredAt)) ||
+      typeof value.token !== "string" ||
+      value.token === ""
+    ) {
       return null;
     }
     return value as LockRecord;
   } catch {
     return null;
+  }
+}
+
+async function lockModifiedAt(path: string): Promise<number | null> {
+  try {
+    return (await stat(path)).mtimeMs;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
   }
 }
 
@@ -87,8 +105,11 @@ export async function withProcessLock<T>(
       }
 
       const existing = await readLock(path);
-      const acquiredAt = existing === null ? Number.NaN : Date.parse(existing.acquiredAt);
-      const isStale = !Number.isFinite(acquiredAt) || now().getTime() - acquiredAt >= staleAfterMs;
+      const acquiredAt = existing === null ? await lockModifiedAt(path) : Date.parse(existing.acquiredAt);
+      if (acquiredAt === null) {
+        continue;
+      }
+      const isStale = now().getTime() - acquiredAt >= staleAfterMs;
       const processIsAlive = existing !== null && isProcessAlive(existing.pid);
 
       if (attempt === 0 && isStale && !processIsAlive) {

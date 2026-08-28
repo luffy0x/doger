@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -49,6 +49,42 @@ test("reclaims a stale lock owned by a dead process", async (context) => {
   const value = await withProcessLock(path, async () => "recovered", {
     now: () => new Date("2026-08-28T01:00:00.000Z"),
     isProcessAlive: () => false,
+  });
+
+  assert.equal(value, "recovered");
+});
+
+test("does not reclaim a fresh lock before its record is complete", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "doger-lock-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "refresh.lock");
+  await writeFile(path, "", { mode: 0o600 });
+  let ran = false;
+
+  await assert.rejects(
+    withProcessLock(
+      path,
+      async () => {
+        ran = true;
+      },
+      { now: () => new Date(), staleAfterMs: 60_000 },
+    ),
+    (error: unknown) => error instanceof DogerError && error.code === "ALREADY_RUNNING",
+  );
+  assert.equal(ran, false);
+});
+
+test("reclaims an invalid lock only after its file age is stale", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "doger-lock-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "refresh.lock");
+  const staleAt = new Date("2026-08-28T00:00:00.000Z");
+  await writeFile(path, "", { mode: 0o600 });
+  await utimes(path, staleAt, staleAt);
+
+  const value = await withProcessLock(path, async () => "recovered", {
+    now: () => new Date("2026-08-28T01:00:00.000Z"),
+    staleAfterMs: 60_000,
   });
 
   assert.equal(value, "recovered");
