@@ -4,12 +4,32 @@ import test from "node:test";
 import { REFRESH_INTERVAL_MS } from "../src/core/config.ts";
 import {
   createConfiguredState,
+  createManuallyAnchoredState,
   dueDecision,
   parseRuntimeState,
   recordOutcome,
   recordSuccess,
   recordTokenReplacement,
 } from "../src/core/state.ts";
+
+test("a confirmed manual refresh creates a conservative anchor without a Doger attempt", () => {
+  const confirmedAt = new Date("2026-08-28T01:02:03.000Z");
+  const state = createManuallyAnchoredState(confirmedAt);
+
+  assert.equal(state.firstSuccessAt, confirmedAt.toISOString());
+  assert.equal(state.lastSuccessAt, confirmedAt.toISOString());
+  assert.equal(state.nextEligibleAt, new Date(confirmedAt.getTime() + REFRESH_INTERVAL_MS).toISOString());
+  assert.equal(state.lastAttemptAt, null);
+  assert.equal(state.lastOutcome, null);
+  assert.equal(dueDecision(state, new Date(confirmedAt.getTime() + REFRESH_INTERVAL_MS - 1)).due, false);
+  assert.equal(dueDecision(state, new Date(confirmedAt.getTime() + REFRESH_INTERVAL_MS)).due, true);
+  assert.deepEqual(parseRuntimeState(state), state);
+
+  const afterDogerSuccess = recordSuccess(state, new Date(confirmedAt.getTime() + REFRESH_INTERVAL_MS));
+  assert.equal(afterDogerSuccess.firstSuccessAt, confirmedAt.toISOString());
+  assert.equal(afterDogerSuccess.lastAttemptAt, afterDogerSuccess.lastSuccessAt);
+  assert.equal(afterDogerSuccess.lastOutcome, "SUCCESS");
+});
 
 test("a configured target is immediately due before its first success", () => {
   const state = createConfiguredState();

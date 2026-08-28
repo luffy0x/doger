@@ -61,6 +61,16 @@ export function createConfiguredState(): RuntimeState {
   return { ...createInitialState(), status: "ready" };
 }
 
+export function createManuallyAnchoredState(confirmedAt: Date): RuntimeState {
+  const timestamp = confirmedAt.toISOString();
+  return {
+    ...createConfiguredState(),
+    firstSuccessAt: timestamp,
+    lastSuccessAt: timestamp,
+    nextEligibleAt: new Date(confirmedAt.getTime() + REFRESH_INTERVAL_MS).toISOString(),
+  };
+}
+
 export function parseRuntimeState(value: unknown): RuntimeState {
   if (!isRecord(value) || value.schemaVersion !== STATE_SCHEMA_VERSION) {
     throw new DogerError("STATE_INVALID", "Unsupported runtime-state schema.");

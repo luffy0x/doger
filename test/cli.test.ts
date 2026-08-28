@@ -27,9 +27,10 @@ class Output {
 }
 
 class MemoryTokenStore implements TokenStore {
-  async get(): Promise<string | null> { return null; }
-  async set(): Promise<void> {}
-  async delete(): Promise<void> {}
+  value: string | null = null;
+  async get(): Promise<string | null> { return this.value; }
+  async set(value: string): Promise<void> { this.value = value; }
+  async delete(): Promise<void> { this.value = null; }
 }
 
 class FakeHiddenInput extends EventEmitter implements HiddenInput {
@@ -74,7 +75,7 @@ function harness(overrides: CliDependencies = {}) {
 test("help describes local token configuration and all commands", () => {
   const help = helpText();
   assert.match(help, /doger, a jd-activity-keeper/);
-  assert.match(help, /init\s+Configure one delivery record and token locally/);
+  assert.match(help, /init\s+Configure locally and optionally anchor a confirmed manual refresh/);
   for (const command of ["init", "refresh", "status", "reauth", "doctor", "uninstall"]) {
     assert.match(help, new RegExp(`\\b${command}\\b`));
   }
@@ -98,22 +99,36 @@ test("maps every refresh outcome to a distinct stable exit code", async () => {
 
 test("init accepts no secret-bearing arguments and uses injected local prompts", async () => {
   let calls = 0;
+  const confirmedAt = new Date("2026-08-28T08:00:00.000Z");
   const { dependencies, stdout } = harness({
+    now: () => confirmedAt,
     prompts: {
       async readDeliveryRecordId() { return "1234567"; },
       async readToken() { return "session=synthetic-token"; },
+      async confirmManualRefresh() { return true; },
       async confirmUninstall() { return false; },
     },
     services: {
-      initialize: async () => {
+      initialize: async (options) => {
         calls += 1;
-        return { schemaVersion: 2, command: "init", outcome: "SUCCESS", scheduleAnchored: false };
+        assert.equal(await options.prompts.confirmManualRefresh(), true);
+        assert.equal(options.now?.(), confirmedAt);
+        return {
+          schemaVersion: 2,
+          command: "init",
+          outcome: "SUCCESS",
+          scheduleAnchored: true,
+          firstSuccessAt: "2026-08-28T08:00:00.000Z",
+          nextEligibleAt: "2026-08-28T16:00:00.000Z",
+        };
       },
     },
   });
   assert.equal(await run(["init", "--json"], dependencies), EXIT_CODES.SUCCESS);
   assert.equal(calls, 1);
-  assert.equal(JSON.parse(stdout.value).scheduleAnchored, false);
+  assert.equal(JSON.parse(stdout.value).scheduleAnchored, true);
+  assert.equal(stdout.value.includes("1234567"), false);
+  assert.equal(stdout.value.includes("synthetic-token"), false);
 
   const rejected = harness();
   assert.equal(await run(["init", "secret", "--json"], rejected.dependencies), EXIT_CODES.CONFIGURATION_FAILURE);
@@ -128,6 +143,43 @@ test("hidden token input never echoes the token", async () => {
   assert.equal(await pending, "session=synthetic-token");
   assert.equal(output.value, "Token: \n");
   assert.equal(input.isRaw, false);
+});
+
+test("init and status report a confirmed manual anchor without identifiers or tokens", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "doger-cli-anchor-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const paths = resolveDogerPaths({ env: { DOGER_DATA_DIR: root } });
+  const tokenStore = new MemoryTokenStore();
+  const confirmedAt = new Date("2026-08-28T08:00:00.000Z");
+  const init = harness({
+    paths,
+    tokenStore,
+    now: () => confirmedAt,
+    prompts: {
+      async readDeliveryRecordId() { return "1234567"; },
+      async readToken() { return "session=synthetic-token"; },
+      async confirmManualRefresh() { return true; },
+      async confirmUninstall() { return false; },
+    },
+  });
+
+  assert.equal(await run(["init", "--json"], init.dependencies), EXIT_CODES.SUCCESS);
+  assert.deepEqual(JSON.parse(init.stdout.value), {
+    schemaVersion: 2,
+    command: "init",
+    outcome: "SUCCESS",
+    scheduleAnchored: true,
+    firstSuccessAt: confirmedAt.toISOString(),
+    nextEligibleAt: "2026-08-28T16:00:00.000Z",
+  });
+
+  const status = harness({ paths, tokenStore });
+  assert.equal(await run(["status", "--json"], status.dependencies), EXIT_CODES.SUCCESS);
+  const statusReport = JSON.parse(status.stdout.value) as Record<string, unknown>;
+  assert.equal(statusReport.scheduleAnchored, true);
+  assert.equal(statusReport.nextEligibleAt, "2026-08-28T16:00:00.000Z");
+  assert.equal(`${init.stdout.value}${status.stdout.value}`.includes("1234567"), false);
+  assert.equal(`${init.stdout.value}${status.stdout.value}`.includes("synthetic-token"), false);
 });
 
 test("redacts internal errors and unknown command text", async () => {

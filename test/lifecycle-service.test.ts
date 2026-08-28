@@ -29,10 +29,11 @@ class MemoryTokenStore implements TokenStore {
   async delete(): Promise<void> { this.value = null; }
 }
 
-function prompts(id = "1234567", token = TOKEN_ONE): ConfigurationPrompts {
+function prompts(id = "1234567", token = TOKEN_ONE, manualRefreshConfirmed = false): ConfigurationPrompts {
   return {
     async readDeliveryRecordId() { return id; },
     async readToken() { return token; },
+    async confirmManualRefresh() { return manualRefreshConfirmed; },
   };
 }
 
@@ -44,18 +45,59 @@ async function fixture(context: test.TestContext) {
 
 test("init stores one target and token locally without creating a success anchor", async (context) => {
   const { paths, tokenStore } = await fixture(context);
-  const report = await initializeDoger({ paths, tokenStore, prompts: prompts() });
+  const report = await initializeDoger({
+    paths,
+    tokenStore,
+    prompts: prompts(),
+    now: () => { throw new Error("unconfirmed initialization must not read the anchor clock"); },
+  });
   const [config, state] = await Promise.all([
     readJsonFile(paths.config, parseConfig),
     readJsonFile(paths.runtimeState, parseRuntimeState),
   ]);
 
-  assert.deepEqual(report, { schemaVersion: 2, command: "init", outcome: "SUCCESS", scheduleAnchored: false });
+  assert.deepEqual(report, {
+    schemaVersion: 2,
+    command: "init",
+    outcome: "SUCCESS",
+    scheduleAnchored: false,
+    firstSuccessAt: null,
+    nextEligibleAt: null,
+  });
   assert.equal(config?.deliveryRecordId, 1_234_567);
   assert.equal(state?.firstSuccessAt, null);
   assert.equal(tokenStore.value, TOKEN_ONE);
   assert.equal(await hasInstallationMarker(paths.installationMarker), true);
   assert.equal((await readFile(paths.config, "utf8")).includes(TOKEN_ONE), false);
+});
+
+test("init anchors a confirmed manual refresh without recording a Doger request", async (context) => {
+  const { paths, tokenStore } = await fixture(context);
+  const confirmedAt = new Date("2026-08-28T01:02:03.000Z");
+  const report = await initializeDoger({
+    paths,
+    tokenStore,
+    prompts: prompts("1234567", TOKEN_ONE, true),
+    now: () => confirmedAt,
+  });
+  const state = await readJsonFile(paths.runtimeState, parseRuntimeState);
+
+  assert.deepEqual(report, {
+    schemaVersion: 2,
+    command: "init",
+    outcome: "SUCCESS",
+    scheduleAnchored: true,
+    firstSuccessAt: confirmedAt.toISOString(),
+    nextEligibleAt: "2026-08-28T09:02:03.000Z",
+  });
+  assert.equal(state?.lastSuccessAt, confirmedAt.toISOString());
+  assert.equal(state?.lastAttemptAt, null);
+  assert.equal(state?.lastOutcome, null);
+  assert.equal((await readFile(paths.runtimeState, "utf8")).includes(TOKEN_ONE), false);
+  const status = await readStatus(paths);
+  assert.equal(status.scheduleAnchored, true);
+  assert.equal(status.nextEligibleAt, report.nextEligibleAt);
+  assert.equal(JSON.stringify(status).includes("1234567"), false);
 });
 
 test("init refuses any existing installation state before prompting or replacing a token", async (context) => {
@@ -69,6 +111,7 @@ test("init refuses any existing installation state before prompting or replacing
       prompts: {
         async readDeliveryRecordId() { prompted = true; return "2"; },
         async readToken() { prompted = true; return TOKEN_ONE; },
+        async confirmManualRefresh() { prompted = true; return true; },
       },
     }),
     (error: unknown) => error instanceof DogerError && error.code === "CONFIG_INVALID",
@@ -86,6 +129,8 @@ test("reauth replaces the token locally and clears only reauthentication state",
   const report = await reauthenticateDoger({ paths, tokenStore, prompts: prompts("unused", TOKEN_TWO) });
   const next = await readJsonFile(paths.runtimeState, parseRuntimeState);
   assert.equal(report.outcome, "SUCCESS");
+  assert.equal(report.firstSuccessAt, null);
+  assert.equal(report.nextEligibleAt, null);
   assert.equal(tokenStore.value, TOKEN_TWO);
   assert.equal(next?.status, "ready");
 

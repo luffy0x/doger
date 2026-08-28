@@ -96,7 +96,7 @@ export function helpText(): string {
     "Usage: doger <command> [options]",
     "",
     "Commands:",
-    "  init                    Configure one delivery record and token locally",
+    "  init                    Configure locally and optionally anchor a confirmed manual refresh",
     "  refresh [--json]        Run one guarded refresh when due",
     "  status [--json]         Show redacted local state",
     "  reauth [--json]         Replace the token locally",
@@ -205,6 +205,12 @@ function createTerminalPrompts(): CliPrompts {
   return {
     readDeliveryRecordId: () => ask("JD delivery record ID: "),
     readToken: () => readHiddenInput(process.stdin, process.stderr, "JD authentication Cookie value: "),
+    async confirmManualRefresh() {
+      const confirmation = await ask(
+        "Type ANCHOR only if the immediately preceding JD website refresh visibly succeeded, or press Enter to continue unanchored: ",
+      );
+      return confirmation.trim() === "ANCHOR";
+    },
     async confirmUninstall() {
       return (await ask("Type UNINSTALL to remove Doger's known local state and token: ")).trim() === "UNINSTALL";
     },
@@ -263,7 +269,12 @@ export async function run(argv: readonly string[], dependencies: CliDependencies
     }
     if (command === "init") {
       requireNoArguments(positional);
-      const report = await withPrompts(dependencies, (prompts) => services.initialize({ paths, tokenStore, prompts }));
+      const report = await withPrompts(dependencies, (prompts) => services.initialize({
+        paths,
+        tokenStore,
+        prompts,
+        ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
+      }));
       writeReport(stdout, report, json);
       return EXIT_CODES.SUCCESS;
     }

@@ -12,6 +12,7 @@ import { REPORT_SCHEMA_VERSION } from "./report.ts";
 import {
   createConfiguredState,
   createInitialState,
+  createManuallyAnchoredState,
   parseRuntimeState,
   recordTokenReplacement,
   type RuntimeState,
@@ -20,12 +21,14 @@ import {
 export interface ConfigurationPrompts {
   readDeliveryRecordId(): Promise<string>;
   readToken(): Promise<string>;
+  confirmManualRefresh(): Promise<boolean>;
 }
 
 export interface LifecycleOptions {
   readonly paths: DogerPaths;
   readonly prompts: ConfigurationPrompts;
   readonly tokenStore: TokenStore;
+  readonly now?: () => Date;
 }
 
 export interface LifecycleReport {
@@ -33,6 +36,8 @@ export interface LifecycleReport {
   readonly command: "init" | "reauth";
   readonly outcome: "SUCCESS";
   readonly scheduleAnchored: boolean;
+  readonly firstSuccessAt: string | null;
+  readonly nextEligibleAt: string | null;
 }
 
 export interface StatusReport {
@@ -119,16 +124,27 @@ export async function initializeDoger(options: LifecycleOptions): Promise<Lifecy
 
     const config = createConfig(await options.prompts.readDeliveryRecordId());
     const token = validateToken(await options.prompts.readToken());
+    const manualRefreshConfirmed = await options.prompts.confirmManualRefresh();
+    const state = manualRefreshConfirmed
+      ? createManuallyAnchoredState((options.now ?? (() => new Date()))())
+      : createConfiguredState();
     try {
       await writeInstallationMarker(options.paths.installationMarker);
       await options.tokenStore.set(token);
       await writeJsonAtomic(options.paths.config, config);
-      await writeJsonAtomic(options.paths.runtimeState, createConfiguredState());
+      await writeJsonAtomic(options.paths.runtimeState, state);
     } catch (error) {
       await rollbackInitialization(options.paths, options.tokenStore);
       throw error;
     }
-    return { schemaVersion: REPORT_SCHEMA_VERSION, command: "init", outcome: "SUCCESS", scheduleAnchored: false };
+    return {
+      schemaVersion: REPORT_SCHEMA_VERSION,
+      command: "init",
+      outcome: "SUCCESS",
+      scheduleAnchored: state.firstSuccessAt !== null,
+      firstSuccessAt: state.firstSuccessAt,
+      nextEligibleAt: state.nextEligibleAt,
+    };
   });
 }
 
@@ -154,6 +170,8 @@ export async function reauthenticateDoger(options: LifecycleOptions): Promise<Li
         command: "reauth",
         outcome: "SUCCESS",
         scheduleAnchored: nextState.firstSuccessAt !== null,
+        firstSuccessAt: nextState.firstSuccessAt,
+        nextEligibleAt: nextState.nextEligibleAt,
       };
     } catch (error) {
       if (previousToken === null) await options.tokenStore.delete().catch(() => undefined);
