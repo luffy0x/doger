@@ -25,7 +25,7 @@ export interface Classification {
   readonly retryAfterAt?: string;
 }
 
-const transientCurlExitCodes = new Set([5, 6, 7, 18, 52, 55, 56]);
+const preRequestTransientCurlExitCodes = new Set([5, 6, 7]);
 
 function bodyMatches(body: string, markers: readonly string[]): boolean {
   const normalizedBody = body.toLowerCase();
@@ -89,8 +89,8 @@ export function classifyResponse(response: CurlResponse, recipe: RequestRecipe, 
 
   if (response.exitCode !== 0) {
     return {
-      outcome: transientCurlExitCodes.has(response.exitCode) ? "TRANSIENT_FAILURE" : "MANUAL_CHECK",
-      reason: transientCurlExitCodes.has(response.exitCode) ? "transient_transport" : "unknown_response",
+      outcome: preRequestTransientCurlExitCodes.has(response.exitCode) ? "TRANSIENT_FAILURE" : "MANUAL_CHECK",
+      reason: preRequestTransientCurlExitCodes.has(response.exitCode) ? "transient_transport" : "unknown_response",
     };
   }
 

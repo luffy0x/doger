@@ -65,6 +65,15 @@ test("classifies cooldown, rate limit, server error, and timeout", () => {
   assert.equal(classifyResponse(response({ exitCode: 28, statusCode: null }), recipe).outcome, "MANUAL_CHECK");
 });
 
+test("does not retry transport failures that may occur after request delivery", () => {
+  for (const exitCode of [18, 52, 55, 56]) {
+    assert.equal(classifyResponse(response({ exitCode, statusCode: null }), recipe).outcome, "MANUAL_CHECK");
+  }
+  for (const exitCode of [5, 6, 7]) {
+    assert.equal(classifyResponse(response({ exitCode, statusCode: null }), recipe).outcome, "TRANSIENT_FAILURE");
+  }
+});
+
 test("parses Retry-After without exposing the response body", () => {
   const now = new Date("2026-08-28T00:00:00.000Z");
   const result = classifyResponse(response({ statusCode: 429, headers: { "retry-after": ["120"] } }), recipe, now);

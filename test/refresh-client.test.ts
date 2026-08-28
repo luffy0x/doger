@@ -69,3 +69,19 @@ test("does not retry an ambiguous timeout", async () => {
   assert.equal(result.attempts, 1);
   assert.equal(attempts, 1);
 });
+
+test("does not retry an ambiguous receive failure", async () => {
+  let attempts = 0;
+
+  const result = await executeRefresh(recipe, credentials, {
+    execute: async () => {
+      attempts += 1;
+      return response({ exitCode: 56, statusCode: null });
+    },
+    sleep: async () => undefined,
+  });
+
+  assert.equal(result.classification.outcome, "MANUAL_CHECK");
+  assert.equal(result.attempts, 1);
+  assert.equal(attempts, 1);
+});
