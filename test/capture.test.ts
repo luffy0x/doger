@@ -205,7 +205,7 @@ test("rejects responses without a safe authoritative success signal", () => {
   );
 });
 
-test("accepts a bounded numeric string as structured success evidence", () => {
+test("accepts a zero business code as structured success evidence", () => {
   const capture = normalizeCapturedRequest(
     detailPayload({ responseBody: JSON.stringify({ result: { resultCode: "0" } }) }),
     cookiePayload(),
@@ -214,6 +214,30 @@ test("accepts a bounded numeric string as structured success evidence", () => {
 
   assert.deepEqual(capture.recipe.response.success.jsonEqualsAny, [
     { path: ["result", "resultCode"], equals: "0" },
+  ]);
+});
+
+test("rejects generic numeric status and nonzero business codes as success evidence", () => {
+  for (const responseBody of [
+    JSON.stringify({ status: 200, message: "synthetic operation failed" }),
+    JSON.stringify({ code: 1, message: "synthetic operation failed" }),
+  ]) {
+    assert.throws(
+      () => normalizeCapturedRequest(detailPayload({ responseBody }), cookiePayload(), new Date()),
+      (error: unknown) => error instanceof DogerError && error.code === "CAPTURE_UNSUPPORTED",
+    );
+  }
+});
+
+test("prefers an explicit success message over a generic numeric status", () => {
+  const capture = normalizeCapturedRequest(
+    detailPayload({ responseBody: JSON.stringify({ status: 200, message: "刷新成功" }) }),
+    cookiePayload(),
+    new Date("2026-08-28T01:02:03.000Z"),
+  );
+
+  assert.deepEqual(capture.recipe.response.success.jsonEqualsAny, [
+    { path: ["message"], equals: "刷新成功" },
   ]);
 });
 

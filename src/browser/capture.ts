@@ -281,20 +281,24 @@ function assertNoDynamicProof(url: URL, headers: Readonly<Record<string, string>
 }
 
 function safeJsonScalar(field: string, value: unknown): boolean {
-  if (typeof value === "boolean") {
-    return field === "success" && value;
+  if (field === "success") {
+    return (
+      value === true ||
+      (typeof value === "string" && ["true", "success", "ok"].includes(value.trim().toLowerCase()))
+    );
   }
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) && Math.abs(value) <= 10_000;
+
+  if (field === "code" || field === "resultcode") {
+    return value === 0 || (typeof value === "string" && value.trim() === "0");
   }
+
   if (typeof value !== "string") {
     return false;
   }
   const normalized = value.trim().toLowerCase();
-  return (
-    safeSuccessStrings.has(normalized) ||
-    ((field === "code" || field === "status" || field === "resultcode") && /^-?\d{1,5}$/u.test(normalized))
-  );
+  return field === "message" || field === "msg"
+    ? safeSuccessStrings.has(normalized)
+    : field === "status" && (normalized === "ok" || normalized === "success");
 }
 
 function successPredicate(responseBody: string): JsonFieldPredicate {
