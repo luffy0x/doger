@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, stat, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 
@@ -44,17 +44,6 @@ async function readLock(path: string): Promise<LockRecord | null> {
     return value as LockRecord;
   } catch {
     return null;
-  }
-}
-
-async function lockModifiedAt(path: string): Promise<number | null> {
-  try {
-    return (await stat(path)).mtimeMs;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
   }
 }
 
@@ -105,15 +94,15 @@ export async function withProcessLock<T>(
       }
 
       const existing = await readLock(path);
-      const acquiredAt = existing === null ? await lockModifiedAt(path) : Date.parse(existing.acquiredAt);
-      if (acquiredAt === null) {
-        continue;
+      if (existing === null) {
+        throw new DogerError("ALREADY_RUNNING", "Another Doger refresh is already running.");
       }
+      const acquiredAt = Date.parse(existing.acquiredAt);
       const isStale = now().getTime() - acquiredAt >= staleAfterMs;
-      const processIsAlive = existing !== null && isProcessAlive(existing.pid);
+      const processIsAlive = isProcessAlive(existing.pid);
 
       if (attempt === 0 && isStale && !processIsAlive) {
-        await unlink(path).catch(() => undefined);
+        await removeIfOwned(path, existing.token);
         continue;
       }
 

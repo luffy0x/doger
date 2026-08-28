@@ -74,7 +74,7 @@ test("does not reclaim a fresh lock before its record is complete", async (conte
   assert.equal(ran, false);
 });
 
-test("reclaims an invalid lock only after its file age is stale", async (context) => {
+test("does not automatically reclaim an invalid lock even when it is old", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "doger-lock-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, "refresh.lock");
@@ -82,10 +82,20 @@ test("reclaims an invalid lock only after its file age is stale", async (context
   await writeFile(path, "", { mode: 0o600 });
   await utimes(path, staleAt, staleAt);
 
-  const value = await withProcessLock(path, async () => "recovered", {
-    now: () => new Date("2026-08-28T01:00:00.000Z"),
-    staleAfterMs: 60_000,
-  });
+  let ran = false;
+  await assert.rejects(
+    withProcessLock(
+      path,
+      async () => {
+        ran = true;
+      },
+      {
+        now: () => new Date("2026-08-28T01:00:00.000Z"),
+        staleAfterMs: 60_000,
+      },
+    ),
+    (error: unknown) => error instanceof DogerError && error.code === "ALREADY_RUNNING",
+  );
 
-  assert.equal(value, "recovered");
+  assert.equal(ran, false);
 });
