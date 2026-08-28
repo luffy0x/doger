@@ -72,7 +72,17 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   const platform = options.platform ?? process.platform;
   const nodeVersion = options.nodeVersion ?? process.versions.node;
   const nodeMajor = Number(nodeVersion.split(".", 1)[0]);
-  const status = await readStatus(options.paths);
+  let configuration: DoctorCheck;
+  try {
+    const status = await readStatus(options.paths);
+    configuration = {
+      name: "configuration",
+      status: status.initialized ? "ok" : "warning",
+      code: status.initialized ? "initialized" : "not_initialized",
+    };
+  } catch {
+    configuration = { name: "configuration", status: "error", code: "configuration_invalid" };
+  }
   const checks: DoctorCheck[] = [
     check("platform", platform === "darwin", ["macos_supported", "unsupported_platform"]),
     check("node", Number.isInteger(nodeMajor) && nodeMajor >= 24, ["node_supported", "node_too_old"]),
@@ -84,11 +94,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
       "agent_browser_available",
       "agent_browser_missing",
     ]),
-    {
-      name: "configuration",
-      status: status.initialized ? "ok" : "warning",
-      code: status.initialized ? "initialized" : "not_initialized",
-    },
+    configuration,
   ];
 
   return {

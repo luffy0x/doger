@@ -2,11 +2,13 @@ import { access, rmdir, unlink } from "node:fs/promises";
 
 import { AgentBrowserSession } from "../browser/agent-browser.ts";
 import { captureRefreshRequest, type CaptureBrowserSession, type NormalizedCapture } from "../browser/capture.ts";
+import { parseRequestRecipe } from "../http/recipe.ts";
 import { readJsonFile, writeJsonAtomic } from "../infra/json-store.ts";
 import { hasInstallationMarker, writeInstallationMarker } from "../infra/installation.ts";
 import { withProcessLock } from "../infra/lock.ts";
 import type { DogerPaths } from "../infra/paths.ts";
 import { EncryptedCredentialStore } from "../security/credential-store.ts";
+import { parseEncryptedEnvelope } from "../security/crypto.ts";
 import type { KeyProvider } from "../security/key-provider.ts";
 import { createConfig, parseConfig, type DogerConfig } from "./config.ts";
 import { DogerError } from "./errors.ts";
@@ -228,16 +230,24 @@ export async function readStatus(paths: DogerPaths): Promise<StatusReport> {
   const [state, installationMarker, config, recipe, credentials] = await Promise.all([
     readJsonFile(paths.runtimeState, parseRuntimeState),
     hasInstallationMarker(paths.installationMarker),
-    fileExists(paths.config),
-    fileExists(paths.recipe),
-    fileExists(paths.credentials),
+    readJsonFile(paths.config, parseConfig),
+    readJsonFile(paths.recipe, parseRequestRecipe),
+    readJsonFile(paths.credentials, parseEncryptedEnvelope),
   ]);
   const current = state ?? createInitialState();
+  const configPresent = config !== null;
+  const recipePresent = recipe !== null;
+  const credentialsPresent = credentials !== null;
 
   return {
     schemaVersion: 1,
     command: "status",
-    initialized: current.firstSuccessAt !== null && installationMarker && config && recipe && credentials,
+    initialized:
+      current.firstSuccessAt !== null &&
+      installationMarker &&
+      configPresent &&
+      recipePresent &&
+      credentialsPresent,
     status: current.status,
     firstSuccessAt: current.firstSuccessAt,
     lastSuccessAt: current.lastSuccessAt,
@@ -246,7 +256,12 @@ export async function readStatus(paths: DogerPaths): Promise<StatusReport> {
     lastOutcome: current.lastOutcome,
     recipeRevision: current.recipeRevision,
     credentialRevision: current.credentialRevision,
-    files: { config, recipe, credentials, installationMarker },
+    files: {
+      config: configPresent,
+      recipe: recipePresent,
+      credentials: credentialsPresent,
+      installationMarker,
+    },
   };
 }
 

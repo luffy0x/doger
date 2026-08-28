@@ -373,3 +373,13 @@ test("uninstall preserves its marker when removing another known path fails", as
   );
   assert.equal(await hasInstallationMarker(paths.installationMarker), true);
 });
+
+test("status rejects corrupt public configuration", async (context) => {
+  const { paths } = await fixture(context);
+  await writeFile(paths.config, "{}", "utf8");
+
+  await assert.rejects(
+    readStatus(paths),
+    (error: unknown) => error instanceof DogerError && error.code === "CONFIG_INVALID",
+  );
+});

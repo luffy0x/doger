@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -44,5 +44,27 @@ test("reports an unavailable dependency without subprocess diagnostics", async (
     name: "curl",
     status: "error",
     code: "curl_missing",
+  });
+});
+
+test("reports corrupt local configuration as a redacted diagnostic", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "doger-doctor-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const paths = resolveDogerPaths({ env: { DOGER_DATA_DIR: root } });
+  await writeFile(paths.config, "{}", "utf8");
+
+  const report = await runDoctor({
+    paths,
+    platform: "darwin",
+    nodeVersion: "24.0.0",
+    probeCurl: async () => true,
+    probeAgentBrowser: async () => true,
+  });
+
+  assert.equal(report.healthy, false);
+  assert.deepEqual(report.checks.find((item) => item.name === "configuration"), {
+    name: "configuration",
+    status: "error",
+    code: "configuration_invalid",
   });
 });
