@@ -180,9 +180,18 @@ function successReport(command: "init" | "reauth", state: RuntimeState): Lifecyc
 
 export async function initializeDoger(applicationUrl: string, options: LifecycleOptions): Promise<LifecycleReport> {
   return await withProcessLock(options.paths.refreshLock, async () => {
-    const existing = await readJsonFile(options.paths.config, parseConfig);
-    if (existing !== null) {
-      throw new DogerError("CONFIG_INVALID", "Doger is already initialized. Use doger reauth or uninstall first.");
+    const existingData = await Promise.all([
+      hasInstallationMarker(options.paths.installationMarker),
+      fileExists(options.paths.config),
+      fileExists(options.paths.recipe),
+      fileExists(options.paths.runtimeState),
+      fileExists(options.paths.credentials),
+    ]);
+    if (existingData.some(Boolean)) {
+      throw new DogerError(
+        "CONFIG_INVALID",
+        "Doger local data already exists. Run doger doctor or uninstall before initializing.",
+      );
     }
 
     const config = createConfig(applicationUrl);

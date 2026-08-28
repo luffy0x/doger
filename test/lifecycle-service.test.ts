@@ -194,24 +194,36 @@ test("declining the action closes the browser without persisting configuration",
   assert.equal(keyProvider.key, null);
 });
 
-test("rejects a second initialization before opening a browser", async (context) => {
-  const { paths, keyProvider } = await fixture(context);
-  await writeJsonAtomic(paths.config, createConfig("https://campus.jd.com/application"));
-  let browsers = 0;
+test("rejects initialization when any known local data already exists", async (context) => {
+  const cases = [
+    ["config", async (paths: ReturnType<typeof resolveDogerPaths>) => writeJsonAtomic(paths.config, {})],
+    ["runtime", async (paths: ReturnType<typeof resolveDogerPaths>) => writeJsonAtomic(paths.runtimeState, {})],
+    ["recipe", async (paths: ReturnType<typeof resolveDogerPaths>) => writeJsonAtomic(paths.recipe, {})],
+    ["credentials", async (paths: ReturnType<typeof resolveDogerPaths>) => writeFile(paths.credentials, "synthetic")],
+    ["marker", async (paths: ReturnType<typeof resolveDogerPaths>) => writeInstallationMarker(paths.installationMarker)],
+  ] as const;
 
-  await assert.rejects(
-    initializeDoger("https://campus.jd.com/other", {
-      paths,
-      keyProvider,
-      browserFactory: () => {
-        browsers += 1;
-        return new FakeSession();
-      },
-      prompts: prompts(true, []),
-    }),
-    (error: unknown) => error instanceof DogerError && error.code === "CONFIG_INVALID",
-  );
-  assert.equal(browsers, 0);
+  for (const [name, prepare] of cases) {
+    await context.test(name, async (subcontext) => {
+      const { paths, keyProvider } = await fixture(subcontext);
+      await prepare(paths);
+      let browsers = 0;
+
+      await assert.rejects(
+        initializeDoger("https://campus.jd.com/other", {
+          paths,
+          keyProvider,
+          browserFactory: () => {
+            browsers += 1;
+            return new FakeSession();
+          },
+          prompts: prompts(true, []),
+        }),
+        (error: unknown) => error instanceof DogerError && error.code === "CONFIG_INVALID",
+      );
+      assert.equal(browsers, 0);
+    });
+  }
 });
 
 test("reauthentication preserves the first-success anchor and advances revisions", async (context) => {
