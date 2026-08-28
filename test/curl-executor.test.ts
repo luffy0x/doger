@@ -196,6 +196,57 @@ test("sends an at-prefixed request body literally instead of reading a local fil
   assert.equal(receivedBody.includes("synthetic-local-file-secret"), false);
 });
 
+test("rejects oversized response headers", async (context) => {
+  const server = createServer((_request, response) => {
+    for (let index = 0; index < 40; index += 1) {
+      response.setHeader(`x-synthetic-${index}`, "x".repeat(4_096));
+    }
+    response.writeHead(200).end("synthetic_success");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("Expected a TCP test server address.");
+  }
+
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "doger-curl-headers-"));
+  context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const recipe = parseRequestRecipe(
+    {
+      schemaVersion: 1,
+      endpoint: `http://127.0.0.1:${address.port}/success`,
+      method: "GET",
+      allowedHosts: ["127.0.0.1"],
+      headerNames: [],
+      includeCookie: false,
+      includeQuery: false,
+      includeBody: false,
+      response: {
+        success: { statusCodes: [200], bodyIncludesAny: ["synthetic_success"] },
+        authBodyIncludesAny: [],
+        authLocationIncludesAny: [],
+        rateLimitBodyIncludesAny: [],
+      },
+    },
+    { allowHttpForLoopbackTests: true },
+  );
+
+  const result = await executeCurl(
+    recipe,
+    { version: 1, capturedAt: credentials.capturedAt, headers: {} },
+    {
+      allowHttpForLoopbackTests: true,
+      temporaryRoot,
+      environment: { ...process.env, NO_PROXY: "127.0.0.1" },
+    },
+  );
+
+  assert.equal(classifyResponse(result, recipe).outcome, "MANUAL_CHECK");
+  assert.equal(result.body, "");
+  assert.deepEqual(result.headers, {});
+});
+
 test("classifies all HTTP outcomes through the real curl boundary", async (context) => {
   const server = createServer((request, response) => {
     const path = request.url?.split("?", 1)[0];

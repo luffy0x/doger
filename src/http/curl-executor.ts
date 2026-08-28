@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,8 @@ import type { CurlResponse } from "./classifier.ts";
 import { parseRequestRecipe, type RecipeParseOptions, type RequestRecipe } from "./recipe.ts";
 
 const MAX_RESPONSE_BYTES = 1_048_576;
+const MAX_RESPONSE_HEADER_BYTES = 131_072;
+const RESPONSE_TOO_LARGE_EXIT_CODE = 63;
 
 export interface CurlExecutorOptions extends RecipeParseOptions {
   readonly curlPath?: string;
@@ -147,6 +149,16 @@ export async function executeCurl(
       child.once("close", (code) => resolve({ exitCode: code ?? 1, stdout }));
       child.stdin.end(config);
     });
+
+    const [bodyInfo, headerInfo] = await Promise.all([stat(bodyPath), stat(headersPath)]);
+    if (bodyInfo.size > MAX_RESPONSE_BYTES || headerInfo.size > MAX_RESPONSE_HEADER_BYTES) {
+      return {
+        exitCode: RESPONSE_TOO_LARGE_EXIT_CODE,
+        statusCode: null,
+        headers: {},
+        body: "",
+      };
+    }
 
     const [body, rawHeaders] = await Promise.all([readFile(bodyPath, "utf8"), readFile(headersPath, "utf8")]);
     const statusCode = /^\d{3}$/u.test(result.stdout.trim()) ? Number(result.stdout.trim()) : null;
