@@ -1,0 +1,40 @@
+{
+  "name": "doger",
+  "version": "0.1.0",
+  "description": "doger, a jd-activity-keeper",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "doger": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    ".agents/skills/doger",
+    "assets",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "npm run typecheck && npm test && npm run build",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luffy0x/doger.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@napi-rs/keyring": "1.3.0",
+    "agent-browser": "0.35.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.0",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,10 +1,10 @@
 ## 1. Project Foundation
 
-- [ ] 1.1 Initialize the npm package as `doger` with the description `doger, a jd-activity-keeper`
-- [ ] 1.2 Configure Node.js 24, strict TypeScript compilation, package scripts, and a CLI binary named `doger`
-- [ ] 1.3 Add `.gitignore` rules that exclude local state, encrypted credentials, browser sessions, HAR files, logs, and temporary captures
-- [ ] 1.4 Add MIT `LICENSE`, `README.md`, and `SECURITY.md`
-- [ ] 1.5 Pin `agent-browser` and `@napi-rs/keyring` in the package lockfile
+- [x] 1.1 Initialize the npm package as `doger` with the description `doger, a jd-activity-keeper`
+- [x] 1.2 Configure Node.js 24, strict TypeScript compilation, package scripts, and a CLI binary named `doger`
+- [x] 1.3 Add `.gitignore` rules that exclude local state, encrypted credentials, browser sessions, HAR files, logs, and temporary captures
+- [x] 1.4 Add MIT `LICENSE`, `README.md`, and `SECURITY.md`
+- [x] 1.5 Pin `agent-browser` and `@napi-rs/keyring` in the package lockfile
 - [ ] 1.6 Display `assets/doger-logo.svg` in README and reuse it for Doger skill metadata where supported
 
 ## 2. Configuration and Runtime State
